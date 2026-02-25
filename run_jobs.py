@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+
+import os
+import argparse
+import logging
+from dotenv import load_dotenv
+
+from log_utils import setup_logging
+from xero_auth import XeroAuth, FileTokenStore
+from xero_jobs import ensure_excel, list_endpoints, endpoint_columns, run_endpoint_selected
+from state_store import JsonStateStore
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+TOKEN_PATH = os.path.join(DATA_DIR, "xero_tokens.json")
+EXCEL_PATH = os.path.join(DATA_DIR, "xero_endpoints.xlsx")
+STATE_PATH = os.path.join(DATA_DIR, "state.json")
+
+# ✅ MINIMAL CHANGE: ensure long-run 401 recovery reads the live token file
+os.environ.setdefault("XERO_TOKEN_PATH", TOKEN_PATH)
+
+DEFAULT_SCOPES = "offline_access accounting.journals.read accounting.contacts accounting.transactions accounting.settings"
+REDIRECT_URI = "http://localhost:8000/callback"
+
+LOG_PATH = os.path.join(DATA_DIR, "run_jobs.log")
+logger = setup_logging(LOG_PATH, name="xero_runner.run_jobs")
+
+def get_scopes() -> str:
+    s = (os.getenv("XERO_SCOPES") or "").strip()
+    return s if s else DEFAULT_SCOPES
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--endpoints", default="", help="comma-separated endpoints")
+    parser.add_argument("--incremental", default="1", help="1 or 0")
+    args = parser.parse_args()
+
+    load_dotenv(os.path.join(BASE_DIR, ".env"))
+    cid = (os.getenv("XERO_CLIENT_ID") or "").strip()
+    csec = (os.getenv("XERO_CLIENT_SECRET") or "").strip()
+    if not cid or not csec:
+        raise RuntimeError("Missing XERO_CLIENT_ID / XERO_CLIENT_SECRET in .env")
+
+    token_store = FileTokenStore(TOKEN_PATH)
+    state = JsonStateStore(STATE_PATH)
+
+    xero = XeroAuth(
+        client_id=cid,
+        client_secret=csec,
+        scopes=get_scopes(),
+        redirect_uri=REDIRECT_URI,
+        token_store=token_store,
+    )
+
+    ensure_excel(EXCEL_PATH)
+
+    incremental = args.incremental.strip() == "1"
+
+    if args.endpoints.strip():
+        endpoints = [e.strip() for e in args.endpoints.split(",") if e.strip()]
+    else:
+        # fallback: run all known endpoints
+        endpoints = list_endpoints()
+
+    headers = xero.headers()
+
+    for ep in endpoints:
+        cols = state.get_preset(ep) or endpoint_columns(ep)
+        watermark = state.get_watermark(ep) if incremental else None
+
+        rows, status, mode, err = run_endpoint_selected(
+            endpoint_name=ep,
+            headers=headers,
+            excel_path=EXCEL_PATH,
+            selected_columns=cols,
+            incremental_since_iso=watermark,
+        )
+
+        if status == "OK":
+            state.set_watermark_now(ep)
+
+        logger.info("%s: %s rows=%s mode=%s err=%s", ep, status, rows, mode, err)
+        print(f"{ep}: {status} rows={rows} mode={mode} err={err}")
+
+if __name__ == "__main__":
+    main()

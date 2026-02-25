@@ -1,0 +1,363 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Xero Runner</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background:#0b0c10; color:#e8e8ea; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 28px; }
+    .card { background:#14161d; border:1px solid #232634; border-radius: 16px; padding: 18px; margin: 14px 0; }
+    h1 { margin: 0 0 6px; font-size: 28px; }
+    .muted { color:#a7adbb; }
+    .row { display:flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; align-items:center; }
+    button { background:#2a2f45; color:#fff; border:1px solid #3a4060; padding: 10px 14px; border-radius: 12px; cursor:pointer; }
+    button:hover { filter: brightness(1.1); }
+    button:disabled { opacity: 0.7; cursor: not-allowed; }
+    .pill { display:inline-block; padding: 4px 10px; border-radius: 999px; background:#22263a; border:1px solid #343a58; font-size: 12px; }
+    pre { white-space: pre-wrap; word-wrap: break-word; background:#0f1117; padding: 12px; border-radius: 12px; border:1px solid #232634; }
+    code { color:#c7d2fe; }
+    .grid { display:grid; grid-template-columns: 300px 1fr; gap: 14px; }
+    .list { display:flex; flex-direction:column; gap:8px; }
+    .endpointBtn { text-align:left; width:100%; }
+    .cols { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+    label.cb { display:flex; gap:8px; align-items:center; background:#10131a; border:1px solid #232634; padding:8px 10px; border-radius:12px; }
+    input[type="checkbox"]{ transform: scale(1.1); }
+    input[type="number"], input[type="text"] { background:#0f1117; border:1px solid #232634; color:#e8e8ea; padding:8px 10px; border-radius:12px; }
+    .small { font-size:12px; color:#a7adbb; }
+    a.btn-link { display:inline-block; background:#2a2f45; color:#fff; border:1px solid #3a4060; padding:10px 14px; border-radius:12px; text-decoration:none; cursor:pointer; }
+    a.btn-link:hover { filter: brightness(1.1); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>🔷 Xero Runner</h1>
+      <div class="muted">Endpoints + Column Presets + Incremental Pulls + Mac Scheduler</div>
+
+      <div style="margin-top:10px;">
+        <span class="pill" id="tenantPill">Tenant: (loading…)</span>
+        <span class="pill" id="tokenPill">Token: (loading…)</span>
+      </div>
+
+      <div class="row">
+        <button onclick="refreshStatus()">Refresh Status</button>
+        <a href="/api/download_excel" class="btn-link" download="xero_endpoints.xlsx">Download Excel</a>
+        <button onclick="openExcel()">Open Excel File</button>
+        <button onclick="reauthorize()">Re-authorize</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div>
+          <h3 style="margin-top:0;">Endpoints</h3>
+          <div class="list" id="endpointList"></div>
+          <div class="small" style="margin-top:10px;">
+            Excel: <code>data/xero_endpoints.xlsx</code>
+          </div>
+        </div>
+
+        <div>
+          <h3 style="margin-top:0;">Columns <span class="small" id="activeEndpointLabel"></span></h3>
+
+          <div class="row">
+            <label class="cb" title="Only pull changes since last successful run">
+              <input type="checkbox" id="incrementalToggle" checked />
+              <span>Incremental</span>
+            </label>
+
+            <button onclick="selectAllCols()">Select all</button>
+            <button onclick="selectNoCols()">Select none</button>
+            <button onclick="savePreset()">Save preset</button>
+            <button type="button" id="runBtn" onclick="runSelected()">Run</button>
+          </div>
+
+          <div class="small" id="watermarkLine" style="margin-top:8px;"></div>
+          <div class="cols" id="columnsGrid" style="margin-top:12px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Scheduler (Mac launchd)</h3>
+      <div class="row">
+        <label class="cb">
+          <input type="checkbox" id="schedEnabled" />
+          <span>Enable schedule</span>
+        </label>
+
+        <span class="small">Every</span>
+        <input type="number" id="schedMinutes" min="1" value="720" style="width:110px;" />
+        <span class="small">minutes</span>
+
+        <label class="cb">
+          <input type="checkbox" id="schedIncremental" checked />
+          <span>Incremental</span>
+        </label>
+
+        <button onclick="saveSchedule()">Save schedule</button>
+        <button onclick="generateSchedulerFiles()">Generate LaunchAgent</button>
+      </div>
+
+      <div class="small" style="margin-top:10px;">
+        Select endpoints to schedule (uses your presets):
+      </div>
+      <div class="row" id="schedEndpointChecks" style="margin-top:8px;"></div>
+
+      <pre id="scheduleOut">(not generated yet)</pre>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Latest Output</h3>
+      <pre id="out">(nothing yet)</pre>
+    </div>
+  </div>
+
+<script>
+let activeEndpoint = null;
+let allEndpoints = [];
+
+async function reauthorize(){
+  // 1) delete token
+  let r1 = await fetch('/api/auth/reset', {method:'POST'});
+  let j1 = await r1.json();
+  document.getElementById('out').textContent = JSON.stringify(j1, null, 2);
+
+  // 2) get authorize URL
+  let r2 = await fetch('/api/auth/start');
+  let j2 = await r2.json();
+  document.getElementById('out').textContent = JSON.stringify(j2, null, 2);
+
+  if (j2 && j2.auth_url){
+    window.open(j2.auth_url, '_blank');
+  }
+}
+
+async function refreshStatus(){
+  const r = await fetch('/api/status');
+  const j = await r.json();
+  document.getElementById('tenantPill').textContent = 'Tenant: ' + (j.tenant_id || '(none)');
+  document.getElementById('tokenPill').textContent  = 'Token: ' + (j.token_state || '(unknown)');
+}
+
+async function loadEndpoints(){
+  const r = await fetch('/api/endpoints');
+  const j = await r.json();
+  allEndpoints = j.endpoints || [];
+
+  // Left list
+  const list = document.getElementById('endpointList');
+  list.innerHTML = '';
+  allEndpoints.forEach(name => {
+    const btn = document.createElement('button');
+    btn.className = 'endpointBtn';
+    btn.textContent = name;
+    btn.onclick = () => setActiveEndpoint(name);
+    list.appendChild(btn);
+  });
+
+  // Scheduler checks
+  const sched = document.getElementById('schedEndpointChecks');
+  sched.innerHTML = '';
+  allEndpoints.forEach(name => {
+    const lab = document.createElement('label');
+    lab.className = 'cb';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = name;
+    cb.id = 'sched_' + name;
+    const sp = document.createElement('span');
+    sp.textContent = name;
+    lab.appendChild(cb); lab.appendChild(sp);
+    sched.appendChild(lab);
+  });
+
+  if (allEndpoints.length && !activeEndpoint) setActiveEndpoint(allEndpoints[0]);
+}
+
+async function setActiveEndpoint(name){
+  activeEndpoint = name;
+  document.getElementById('activeEndpointLabel').textContent = activeEndpoint ? `(${activeEndpoint})` : '';
+  document.getElementById('out').textContent = `Loaded endpoint: ${name}`;
+
+  const r = await fetch('/api/columns?endpoint=' + encodeURIComponent(name));
+  const j = await r.json();
+  const cols = j.columns || [];
+  const preset = j.preset || null;
+  const watermark = j.watermark || null;
+
+  document.getElementById('watermarkLine').textContent =
+    watermark ? `Watermark: ${watermark}` : `Watermark: (none yet)`;
+
+  const grid = document.getElementById('columnsGrid');
+  grid.innerHTML = '';
+
+  // which cols selected?
+  const selected = new Set(preset && Array.isArray(preset) ? preset : cols);
+
+  cols.forEach(c => {
+    const lab = document.createElement('label');
+    lab.className = 'cb';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = c;
+    cb.checked = selected.has(c);
+    const sp = document.createElement('span');
+    sp.textContent = c;
+    lab.appendChild(cb); lab.appendChild(sp);
+    grid.appendChild(lab);
+  });
+}
+
+function selectedColumns(){
+  const grid = document.getElementById('columnsGrid');
+  const cbs = grid.querySelectorAll('input[type="checkbox"]');
+  const cols = [];
+  cbs.forEach(cb => { if (cb.checked) cols.push(cb.value); });
+  return cols;
+}
+
+function selectAllCols(){
+  document.querySelectorAll('#columnsGrid input[type="checkbox"]').forEach(cb => cb.checked = true);
+}
+
+function selectNoCols(){
+  document.querySelectorAll('#columnsGrid input[type="checkbox"]').forEach(cb => cb.checked = false);
+}
+
+async function savePreset(){
+  if (!activeEndpoint) return;
+  const cols = selectedColumns();
+  const r = await fetch('/api/preset', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({endpoint: activeEndpoint, columns: cols})
+  });
+  const j = await r.json();
+  document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+}
+
+async function triggerExcelDownload(endpoint){
+  try {
+    const q = new URLSearchParams({ t: String(Date.now()) });
+    if (endpoint) q.set('endpoint', endpoint);
+    const r = await fetch('/api/download_excel?' + q.toString());
+    if (!r.ok) return;
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = endpoint ? 'xero_' + endpoint + '.xlsx' : 'xero_endpoints.xlsx';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 200);
+  } catch (e) {
+    console.error('Download failed', e);
+  }
+}
+
+async function runSelected(){
+  const outEl = document.getElementById('out');
+  const runBtn = document.getElementById('runBtn');
+  const outputCard = outEl && outEl.closest ? outEl.closest('.card') : null;
+
+  function setRunning(running) {
+    if (runBtn) {
+      runBtn.textContent = running ? 'Running…' : 'Run';
+      runBtn.disabled = running;
+    }
+  }
+
+  if (!activeEndpoint) {
+    outEl.textContent = 'Please select an endpoint from the list on the left first (e.g. Organisation, JournalLines).';
+    if (outputCard) outputCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return;
+  }
+  const cols = selectedColumns();
+  const incremental = document.getElementById('incrementalToggle').checked;
+
+  setRunning(true);
+  outEl.textContent = 'Running ' + activeEndpoint + '…';
+  if (outputCard) outputCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  try {
+    const r = await fetch('/api/run', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({endpoint: activeEndpoint, columns: cols, incremental})
+    });
+    const text = await r.text();
+    let j;
+    try {
+      j = JSON.parse(text);
+    } catch (_) {
+      outEl.textContent = 'Server error (' + r.status + '):\n' + text;
+      setRunning(false);
+      return;
+    }
+    outEl.textContent = JSON.stringify(j, null, 2);
+    refreshStatus();
+    if (j && j.ok) await triggerExcelDownload(activeEndpoint);
+  } catch (e) {
+    outEl.textContent = 'Error: ' + (e.message || String(e));
+    console.error('Run failed', e);
+  } finally {
+    setRunning(false);
+  }
+}
+
+async function openExcel(){
+  const r = await fetch('/api/open_excel', {method:'POST'});
+  const j = await r.json();
+  document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+}
+
+async function loadSchedule(){
+  const r = await fetch('/api/schedule');
+  const j = await r.json();
+  document.getElementById('schedEnabled').checked = !!j.enabled;
+  document.getElementById('schedMinutes').value = j.interval_minutes || 720;
+  document.getElementById('schedIncremental').checked = !!j.incremental;
+
+  const eps = new Set(j.endpoints || []);
+  allEndpoints.forEach(name => {
+    const cb = document.getElementById('sched_' + name);
+    if (cb) cb.checked = eps.has(name);
+  });
+}
+
+async function saveSchedule(){
+  const enabled = document.getElementById('schedEnabled').checked;
+  const interval_minutes = parseInt(document.getElementById('schedMinutes').value || '720', 10);
+  const incremental = document.getElementById('schedIncremental').checked;
+
+  const endpoints = [];
+  allEndpoints.forEach(name => {
+    const cb = document.getElementById('sched_' + name);
+    if (cb && cb.checked) endpoints.push(name);
+  });
+
+  const r = await fetch('/api/schedule', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({enabled, interval_minutes, endpoints, incremental})
+  });
+  const j = await r.json();
+  document.getElementById('scheduleOut').textContent = JSON.stringify(j, null, 2);
+}
+
+async function generateSchedulerFiles(){
+  const r = await fetch('/api/scheduler_files', {method:'POST'});
+  const j = await r.json();
+  document.getElementById('scheduleOut').textContent = JSON.stringify(j, null, 2);
+}
+
+// init
+refreshStatus();
+loadEndpoints().then(loadSchedule);
+</script>
+</body>
+</html>
