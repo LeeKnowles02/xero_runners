@@ -11,6 +11,8 @@ from email.utils import format_datetime
 from typing import Dict, Any, List, Tuple, Optional, Set
 
 import requests
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from urllib3.exceptions import ProtocolError as Urllib3ProtocolError
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
@@ -627,14 +629,28 @@ def _force_refresh_headers(current_headers: Dict[str, str]) -> Optional[Dict[str
         logger.warning("401 force-refresh failed (%s)", e)
         return None
 
+# Timeout for Xero API calls (seconds). Journals can be slow with large datasets.
+XERO_REQUEST_TIMEOUT = int(os.getenv("XERO_REQUEST_TIMEOUT", "120"))
+
 def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None) -> requests.Response:
     max_attempts = 8
     base_sleep = 1.0
+    conn_retries = 3  # retry on connection drop (RemoteDisconnected, etc.)
 
     for attempt in range(1, max_attempts + 1):
         time.sleep(XERO_THROTTLE_SECONDS)
 
-        r = requests.get(url, headers=headers, params=params or {}, timeout=90)
+        for conn_attempt in range(conn_retries):
+            try:
+                r = requests.get(url, headers=headers, params=params or {}, timeout=XERO_REQUEST_TIMEOUT)
+                break
+            except (RequestsConnectionError, Urllib3ProtocolError, OSError) as conn_err:
+                if conn_attempt < conn_retries - 1:
+                    wait = 5 * (conn_attempt + 1)
+                    logger.warning("Connection error (attempt %s/%s), retrying in %ss: %s", conn_attempt + 1, conn_retries, wait, conn_err)
+                    time.sleep(wait)
+                else:
+                    raise
 
         if r.status_code == 304:
             return r
@@ -645,7 +661,7 @@ def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]
                 logger.warning("Xero 401: reloaded Authorization from token file; retrying url=%s", url)
                 headers.update(new_headers)
                 time.sleep(XERO_THROTTLE_SECONDS)
-                r = requests.get(url, headers=headers, params=params or {}, timeout=90)
+                r = requests.get(url, headers=headers, params=params or {}, timeout=XERO_REQUEST_TIMEOUT)
                 if r.status_code == 304:
                     return r
                 if r.status_code == 200:
@@ -656,7 +672,7 @@ def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]
                 logger.warning("Xero 401: forced token refresh; retrying url=%s", url)
                 headers.update(forced)
                 time.sleep(XERO_THROTTLE_SECONDS)
-                r = requests.get(url, headers=headers, params=params or {}, timeout=90)
+                r = requests.get(url, headers=headers, params=params or {}, timeout=XERO_REQUEST_TIMEOUT)
                 if r.status_code == 304:
                     return r
                 if r.status_code == 200:
@@ -1171,6 +1187,17 @@ def run_endpoint_selected(
                 rows_written = write_sheet_selected_columns(wb, sheet_name, items, cols)
             append_run_log(wb, endpoint_name, mode, rows_written, "OK", None)
             save_workbook_atomic(wb, excel_path)
+
+            # Persist to Azure SQL (xero schema) if DB is configured
+            try:
+                from xero_db import save_endpoint_to_db, col_to_sql
+                db_rows = [{col_to_sql(c): get_by_path(item, c) for c in cols} for item in items]
+                db_written = save_endpoint_to_db(endpoint_name, db_rows, cols)
+                if db_written:
+                    logger.info("Generic endpoint %s: wrote %s rows to DB (xero.%s)", endpoint_name, db_written, endpoint_name)
+            except Exception as db_err:
+                logger.warning("DB write skipped for %s: %s", endpoint_name, db_err)
+
             logger.info("Generic endpoint %s: wrote %s rows (mode=%s)", endpoint_name, rows_written, mode)
             return rows_written, "OK", mode, None
 
