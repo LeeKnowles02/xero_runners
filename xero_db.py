@@ -16,6 +16,28 @@ def _quote_sql_identifier(name: str) -> str:
     return f"[{s}]"
 
 
+def _get_table_columns(conn, table_name: str) -> List[str]:
+    """Return list of column names for xero.{table_name} (excluding UpdatedAt)."""
+    r = conn.execute(
+        text("""
+            SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = 'xero' AND TABLE_NAME = :tname AND COLUMN_NAME <> 'UpdatedAt'
+            ORDER BY ORDINAL_POSITION
+        """),
+        {"tname": table_name},
+    )
+    return [row[0] for row in r]
+
+
+def _row_value(row: Dict[str, Any], col: str) -> Any:
+    """Get value for column from row; accept either 'Contact.ContactID' or 'Contact_ContactID'."""
+    v = row.get(col)
+    if v is not None:
+        return v
+    alt = col.replace(".", "_")
+    return row.get(alt)
+
+
 def _ensure_xero_schema(conn) -> None:
     """Create xero schema if it doesn't exist."""
     conn.execute(text("IF SCHEMA_ID('xero') IS NULL EXEC('CREATE SCHEMA xero');"))
@@ -67,17 +89,25 @@ def save_endpoint_to_db(
     with eng.begin() as conn:
         _ensure_table(conn, table_name, columns, pk_col)
 
+        try:
+            table_cols = _get_table_columns(conn, table_name)
+        except Exception:
+            table_cols = columns
+        if not table_cols:
+            table_cols = columns
+        pk_col = table_cols[0]
+
         for row in rows:
             params = {}
-            for i, c in enumerate(columns):
-                v = row.get(c)
+            for i, c in enumerate(table_cols):
+                v = _row_value(row, c)
                 params[f"p{i}"] = v if isinstance(v, (str, type(None))) else str(v) if v is not None else None
-            select_parts = [f":p{i} AS {q(c)}" for i, c in enumerate(columns)]
-            set_parts = [f"t.{q(c)} = s.{q(c)}" for c in columns if c != pk_col]
+            select_parts = [f":p{i} AS {q(c)}" for i, c in enumerate(table_cols)]
+            set_parts = [f"t.{q(c)} = s.{q(c)}" for c in table_cols if c != pk_col]
             set_parts.append("t.[UpdatedAt] = SYSUTCDATETIME()")
             set_clause = ", ".join(set_parts)
-            insert_cols = ", ".join(q(c) for c in columns) + ", [UpdatedAt]"
-            insert_vals = ", ".join(f"s.{q(c)}" for c in columns) + ", SYSUTCDATETIME()"
+            insert_cols = ", ".join(q(c) for c in table_cols) + ", [UpdatedAt]"
+            insert_vals = ", ".join(f"s.{q(c)}" for c in table_cols) + ", SYSUTCDATETIME()"
             merge_sql = f"""
             MERGE xero.[{table_name}] AS t
             USING (SELECT {", ".join(select_parts)}) AS s
