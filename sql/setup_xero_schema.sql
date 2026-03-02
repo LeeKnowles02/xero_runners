@@ -1,28 +1,18 @@
 -- =============================================================================
--- DROP ALL XERO TABLES AND RECREATE WITH CORRECT COLUMN NAMES
--- (Same as xero_jobs.py ENDPOINTS -> columns; dots kept e.g. Contact.Name, JournalLine.Description)
+-- XERO SCHEMA SETUP – run once to create schema and tables (no drop, safe to re-run)
+-- Column names match the app UI / xero_jobs.py ENDPOINTS (dots kept e.g. Contact.Name)
 -- =============================================================================
--- WARNING: DROPS existing xero.* tables and DELETES ALL DATA in them.
--- Run this once, then use the app to re-run each endpoint to repopulate the tables.
+-- Use this script for initial setup or to add missing tables. It does NOT drop
+-- existing tables or data. For a full reset (drop + recreate), use
+-- recreate_xero_tables_correct_columns.sql instead.
 -- =============================================================================
 
 IF SCHEMA_ID('xero') IS NULL
     EXEC('CREATE SCHEMA xero');
 GO
 
-IF OBJECT_ID('xero.Organisation', 'U') IS NOT NULL DROP TABLE xero.Organisation;
-IF OBJECT_ID('xero.Journals', 'U') IS NOT NULL DROP TABLE xero.Journals;
-IF OBJECT_ID('xero.JournalLines', 'U') IS NOT NULL DROP TABLE xero.JournalLines;
-IF OBJECT_ID('xero.Contacts', 'U') IS NOT NULL DROP TABLE xero.Contacts;
-IF OBJECT_ID('xero.Invoices', 'U') IS NOT NULL DROP TABLE xero.Invoices;
-IF OBJECT_ID('xero.Payments', 'U') IS NOT NULL DROP TABLE xero.Payments;
-IF OBJECT_ID('xero.BankTransactions', 'U') IS NOT NULL DROP TABLE xero.BankTransactions;
-IF OBJECT_ID('xero.Accounts', 'U') IS NOT NULL DROP TABLE xero.Accounts;
-IF OBJECT_ID('xero.TrackingCategories', 'U') IS NOT NULL DROP TABLE xero.TrackingCategories;
-IF OBJECT_ID('xero.TaxRates', 'U') IS NOT NULL DROP TABLE xero.TaxRates;
-GO
-
 -- Organisation
+IF OBJECT_ID('xero.Organisation', 'U') IS NULL
 CREATE TABLE xero.Organisation (
     [OrganisationID] NVARCHAR(255) NOT NULL,
     [Name] NVARCHAR(MAX) NULL, [BaseCurrency] NVARCHAR(MAX) NULL, [CountryCode] NVARCHAR(MAX) NULL,
@@ -35,6 +25,7 @@ CREATE TABLE xero.Organisation (
 GO
 
 -- Journals
+IF OBJECT_ID('xero.Journals', 'U') IS NULL
 CREATE TABLE xero.Journals (
     [JournalID] NVARCHAR(255) NOT NULL,
     [JournalNumber] NVARCHAR(MAX) NULL, [JournalDate] NVARCHAR(MAX) NULL, [CreatedDateUTC] NVARCHAR(MAX) NULL,
@@ -43,7 +34,8 @@ CREATE TABLE xero.Journals (
     CONSTRAINT PK_xero_Journals PRIMARY KEY ([JournalID]));
 GO
 
--- JournalLines (column names exactly as in app: JournalLine.AccountCode etc.)
+-- JournalLines (one row per line; PK is JournalID – app may overwrite same journal’s line in DB)
+IF OBJECT_ID('xero.JournalLines', 'U') IS NULL
 CREATE TABLE xero.JournalLines (
     [JournalID] NVARCHAR(255) NOT NULL,
     [JournalNumber] NVARCHAR(MAX) NULL, [JournalDate] NVARCHAR(MAX) NULL,
@@ -56,6 +48,7 @@ CREATE TABLE xero.JournalLines (
 GO
 
 -- Contacts
+IF OBJECT_ID('xero.Contacts', 'U') IS NULL
 CREATE TABLE xero.Contacts (
     [ContactID] NVARCHAR(255) NOT NULL,
     [Name] NVARCHAR(MAX) NULL, [EmailAddress] NVARCHAR(MAX) NULL, [ContactStatus] NVARCHAR(MAX) NULL,
@@ -64,7 +57,8 @@ CREATE TABLE xero.Contacts (
     CONSTRAINT PK_xero_Contacts PRIMARY KEY ([ContactID]));
 GO
 
--- Invoices (Contact.ContactID, Contact.Name as in app)
+-- Invoices
+IF OBJECT_ID('xero.Invoices', 'U') IS NULL
 CREATE TABLE xero.Invoices (
     [InvoiceID] NVARCHAR(255) NOT NULL,
     [InvoiceNumber] NVARCHAR(MAX) NULL, [Type] NVARCHAR(MAX) NULL, [Status] NVARCHAR(MAX) NULL,
@@ -77,7 +71,8 @@ CREATE TABLE xero.Invoices (
     CONSTRAINT PK_xero_Invoices PRIMARY KEY ([InvoiceID]));
 GO
 
--- Payments (Invoice.InvoiceID, Invoice.InvoiceNumber as in app)
+-- Payments
+IF OBJECT_ID('xero.Payments', 'U') IS NULL
 CREATE TABLE xero.Payments (
     [PaymentID] NVARCHAR(255) NOT NULL,
     [Invoice.InvoiceID] NVARCHAR(MAX) NULL, [Invoice.InvoiceNumber] NVARCHAR(MAX) NULL,
@@ -87,7 +82,8 @@ CREATE TABLE xero.Payments (
     CONSTRAINT PK_xero_Payments PRIMARY KEY ([PaymentID]));
 GO
 
--- BankTransactions (Contact.ContactID, Contact.Name as in app)
+-- BankTransactions
+IF OBJECT_ID('xero.BankTransactions', 'U') IS NULL
 CREATE TABLE xero.BankTransactions (
     [BankTransactionID] NVARCHAR(255) NOT NULL,
     [Type] NVARCHAR(MAX) NULL, [Status] NVARCHAR(MAX) NULL, [Date] NVARCHAR(MAX) NULL, [Reference] NVARCHAR(MAX) NULL,
@@ -99,6 +95,7 @@ CREATE TABLE xero.BankTransactions (
 GO
 
 -- Accounts
+IF OBJECT_ID('xero.Accounts', 'U') IS NULL
 CREATE TABLE xero.Accounts (
     [AccountID] NVARCHAR(255) NOT NULL,
     [Code] NVARCHAR(MAX) NULL, [Name] NVARCHAR(MAX) NULL, [Type] NVARCHAR(MAX) NULL, [Class] NVARCHAR(MAX) NULL,
@@ -109,6 +106,7 @@ CREATE TABLE xero.Accounts (
 GO
 
 -- TrackingCategories
+IF OBJECT_ID('xero.TrackingCategories', 'U') IS NULL
 CREATE TABLE xero.TrackingCategories (
     [TrackingCategoryID] NVARCHAR(255) NOT NULL,
     [Name] NVARCHAR(MAX) NULL, [Status] NVARCHAR(MAX) NULL, [Options] NVARCHAR(MAX) NULL,
@@ -117,6 +115,7 @@ CREATE TABLE xero.TrackingCategories (
 GO
 
 -- TaxRates
+IF OBJECT_ID('xero.TaxRates', 'U') IS NULL
 CREATE TABLE xero.TaxRates (
     [TaxType] NVARCHAR(255) NOT NULL,
     [Name] NVARCHAR(MAX) NULL, [Status] NVARCHAR(MAX) NULL, [ReportTaxType] NVARCHAR(MAX) NULL,
@@ -125,3 +124,11 @@ CREATE TABLE xero.TaxRates (
     [UpdatedAt] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT PK_xero_TaxRates PRIMARY KEY ([TaxType]));
 GO
+
+-- =============================================================================
+-- Quick checks (run in SSMS after syncing data):
+--   SELECT COUNT(*) FROM xero.Organisation;
+--   SELECT TOP 10 * FROM xero.Journals ORDER BY [UpdatedAt] DESC;
+--   SELECT TOP 10 * FROM xero.Contacts ORDER BY [UpdatedAt] DESC;
+--   SELECT TOP 10 * FROM xero.Invoices ORDER BY [UpdatedAt] DESC;
+-- =============================================================================
