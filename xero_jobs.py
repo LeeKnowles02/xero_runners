@@ -1190,8 +1190,8 @@ def run_endpoint_selected(
 
             # Persist to Azure SQL (xero schema) if DB is configured
             try:
-                from xero_db import save_endpoint_to_db, col_to_sql
-                db_rows = [{col_to_sql(c): get_by_path(item, c) for c in cols} for item in items]
+                from xero_db import save_endpoint_to_db
+                db_rows = [{c: get_by_path(item, c) for c in cols} for item in items]
                 db_written = save_endpoint_to_db(endpoint_name, db_rows, cols)
                 if db_written:
                     logger.info("Generic endpoint %s: wrote %s rows to DB (xero.%s)", endpoint_name, db_written, endpoint_name)
