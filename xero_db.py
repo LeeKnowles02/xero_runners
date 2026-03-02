@@ -3,11 +3,17 @@ Persist Xero endpoint data to Azure SQL (xero schema).
 Used when Run is clicked: after writing Excel, we upsert to DB so data is in SSMS too.
 """
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 logger = logging.getLogger("xero_runner.xero_db")
+
+# Retry on connection errors (e.g. TCP 0x20, dropped connection)
+DB_WRITE_RETRIES = 3
+DB_WRITE_RETRY_DELAY = 2.0
 
 
 def _quote_sql_identifier(name: str) -> str:
@@ -86,36 +92,52 @@ def save_endpoint_to_db(
     table_name = endpoint_name.replace(" ", "_")
     q = _quote_sql_identifier
 
-    with eng.begin() as conn:
-        _ensure_table(conn, table_name, columns, pk_col)
-
+    last_err = None
+    for attempt in range(DB_WRITE_RETRIES):
         try:
-            table_cols = _get_table_columns(conn, table_name)
-        except Exception:
-            table_cols = columns
-        if not table_cols:
-            table_cols = columns
-        pk_col = table_cols[0]
+            with eng.begin() as conn:
+                _ensure_table(conn, table_name, columns, pk_col)
 
-        for row in rows:
-            params = {}
-            for i, c in enumerate(table_cols):
-                v = _row_value(row, c)
-                params[f"p{i}"] = v if isinstance(v, (str, type(None))) else str(v) if v is not None else None
-            select_parts = [f":p{i} AS {q(c)}" for i, c in enumerate(table_cols)]
-            set_parts = [f"t.{q(c)} = s.{q(c)}" for c in table_cols if c != pk_col]
-            set_parts.append("t.[UpdatedAt] = SYSUTCDATETIME()")
-            set_clause = ", ".join(set_parts)
-            insert_cols = ", ".join(q(c) for c in table_cols) + ", [UpdatedAt]"
-            insert_vals = ", ".join(f"s.{q(c)}" for c in table_cols) + ", SYSUTCDATETIME()"
-            merge_sql = f"""
-            MERGE xero.[{table_name}] AS t
-            USING (SELECT {", ".join(select_parts)}) AS s
-            ON t.{q(pk_col)} = s.{q(pk_col)}
-            WHEN MATCHED THEN UPDATE SET {set_clause}
-            WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals});
-            """
-            conn.execute(text(merge_sql), params)
+                try:
+                    table_cols = _get_table_columns(conn, table_name)
+                except Exception:
+                    table_cols = columns
+                if not table_cols:
+                    table_cols = columns
+                pk_col = table_cols[0]
 
-    logger.info("Wrote %s rows to xero.%s", len(rows), table_name)
-    return len(rows)
+                for row in rows:
+                    params = {}
+                    for i, c in enumerate(table_cols):
+                        v = _row_value(row, c)
+                        params[f"p{i}"] = v if isinstance(v, (str, type(None))) else str(v) if v is not None else None
+                    select_parts = [f":p{i} AS {q(c)}" for i, c in enumerate(table_cols)]
+                    set_parts = [f"t.{q(c)} = s.{q(c)}" for c in table_cols if c != pk_col]
+                    set_parts.append("t.[UpdatedAt] = SYSUTCDATETIME()")
+                    set_clause = ", ".join(set_parts)
+                    insert_cols = ", ".join(q(c) for c in table_cols) + ", [UpdatedAt]"
+                    insert_vals = ", ".join(f"s.{q(c)}" for c in table_cols) + ", SYSUTCDATETIME()"
+                    merge_sql = f"""
+                    MERGE xero.[{table_name}] AS t
+                    USING (SELECT {", ".join(select_parts)}) AS s
+                    ON t.{q(pk_col)} = s.{q(pk_col)}
+                    WHEN MATCHED THEN UPDATE SET {set_clause}
+                    WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals});
+                    """
+                    conn.execute(text(merge_sql), params)
+            logger.info("Wrote %s rows to xero.%s", len(rows), table_name)
+            return len(rows)
+        except OperationalError as e:
+            last_err = e
+            if attempt < DB_WRITE_RETRIES - 1:
+                logger.warning("DB write attempt %s/%s failed (will retry): %s", attempt + 1, DB_WRITE_RETRIES, e)
+                time.sleep(DB_WRITE_RETRY_DELAY)
+            else:
+                raise
+        except Exception as e:
+            last_err = e
+            if attempt < DB_WRITE_RETRIES - 1 and ("08S01" in str(getattr(e, "orig", "")) or "TCP" in str(e)):
+                logger.warning("DB connection error (will retry): %s", e)
+                time.sleep(DB_WRITE_RETRY_DELAY)
+            else:
+                raise

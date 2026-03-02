@@ -948,6 +948,7 @@ def run_endpoint_selected(
             numbers = _journal_number_set_from_sheet(wsj, cols)
             discontinuity = _detect_discontinuity(numbers)
 
+            items_b: List[Dict[str, Any]] = []
             rows_b = 0
             if discontinuity:
                 existing_ids2: Set[str] = _load_first_col_set(wsj)
@@ -965,6 +966,17 @@ def run_endpoint_selected(
             mode2 = mode + (f" + GAPFILL({rows_b})" if discontinuity else "")
             append_run_log(wb, endpoint_name, mode2, rows_written, "OK", None)
             save_workbook_atomic(wb, excel_path)
+
+            all_journal_items = items_a + items_b
+            try:
+                from xero_db import save_endpoint_to_db
+                db_rows = [{c: get_by_path(item, c) for c in cols} for item in all_journal_items]
+                db_written = save_endpoint_to_db("Journals", db_rows, cols)
+                if db_written:
+                    logger.info("Journals: wrote %s rows to DB (xero.Journals)", db_written)
+            except Exception as db_err:
+                logger.warning("DB write skipped for Journals: %s", db_err)
+
             logger.info("Wrote %s rows to %s (mode=%s)", rows_written, endpoint_name, mode2)
             return rows_written, "OK", mode2, None
 
