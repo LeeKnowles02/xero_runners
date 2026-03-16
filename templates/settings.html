@@ -1,0 +1,31 @@
+{% extends 'layout.html' %}
+{% block title %}Settings | Xero Runner{% endblock %}
+
+{% block content %}
+  <div class="stack-24">
+    <div class="stack-6">
+      <h1 class="h1">Settings</h1>
+      <div class="muted">Application and export preferences in one place.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Appearance</h2>
+        <div class="muted">Use the theme switcher in the Options menu (bottom of the sidebar) to switch between Light, Dark, or System.</div>
+      </div>
+      <div class="card-body">
+        <p class="muted">Your theme preference is saved in this browser.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">General</h2>
+        <div class="muted">General application settings.</div>
+      </div>
+      <div class="card-body">
+        <p class="muted">More options can be added here (e.g. API defaults, export paths, notifications).</p>
+      </div>
+    </div>
+  </div>
+{% endblock %}

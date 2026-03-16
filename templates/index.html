@@ -1,130 +1,109 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Xero Runner</title>
-  <style>
-    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background:#0b0c10; color:#e8e8ea; }
-    .wrap { max-width: 1080px; margin: 0 auto; padding: 28px; }
-    .card { background:#14161d; border:1px solid #232634; border-radius: 16px; padding: 18px; margin: 14px 0; }
-    h1 { margin: 0 0 6px; font-size: 28px; }
-    .muted { color:#a7adbb; }
-    .row { display:flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; align-items:center; }
-    button { background:#2a2f45; color:#fff; border:1px solid #3a4060; padding: 10px 14px; border-radius: 12px; cursor:pointer; }
-    button:hover { filter: brightness(1.1); }
-    button:disabled { opacity: 0.7; cursor: not-allowed; }
-    .pill { display:inline-block; padding: 4px 10px; border-radius: 999px; background:#22263a; border:1px solid #343a58; font-size: 12px; }
-    pre { white-space: pre-wrap; word-wrap: break-word; background:#0f1117; padding: 12px; border-radius: 12px; border:1px solid #232634; }
-    code { color:#c7d2fe; }
-    .grid { display:grid; grid-template-columns: 300px 1fr; gap: 14px; }
-    .list { display:flex; flex-direction:column; gap:8px; }
-    .endpointBtn { text-align:left; width:100%; }
-    .cols { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
-    label.cb { display:flex; gap:8px; align-items:center; background:#10131a; border:1px solid #232634; padding:8px 10px; border-radius:12px; }
-    input[type="checkbox"]{ transform: scale(1.1); }
-    input[type="number"], input[type="text"] { background:#0f1117; border:1px solid #232634; color:#e8e8ea; padding:8px 10px; border-radius:12px; }
-    .small { font-size:12px; color:#a7adbb; }
-    a.btn-link { display:inline-block; background:#2a2f45; color:#fff; border:1px solid #3a4060; padding:10px 14px; border-radius:12px; text-decoration:none; cursor:pointer; }
-    a.btn-link:hover { filter: brightness(1.1); }
-  </style>
-</head>
-<body>
-  <div class="wrap">
+{% extends 'layout.html' %}
+{% block title %}Dashboard | Xero Runner{% endblock %}
+
+{% block content %}
+  <div class="stack-24">
     <div class="card">
-      <h1>🔷 Xero Runner</h1>
-      <div class="muted">Endpoints + Column Presets + Incremental Pulls + Mac Scheduler</div>
-
-      <div style="margin-top:10px;">
-        <span class="pill" id="tenantPill">Tenant: (loading…)</span>
-        <span class="pill" id="tokenPill">Token: (loading…)</span>
-      </div>
-
-      <div class="row">
-        <button onclick="refreshStatus()">Refresh Status</button>
-        <a href="/api/download_excel" class="btn-link" download="xero_endpoints.xlsx">Download Excel</a>
-        <button onclick="openExcel()">Open Excel File</button>
-        <button onclick="reauthorize()">Re-authorize</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="grid">
-        <div>
-          <h3 style="margin-top:0;">Endpoints</h3>
-          <div class="list" id="endpointList"></div>
-          <div class="small" style="margin-top:10px;">
-            Excel: <code>data/xero_endpoints.xlsx</code>
+      <div class="card-header">
+        <div class="space-between">
+          <div class="stack-6">
+            <h1 class="h1">Xero Runner</h1>
+            <div class="muted">Endpoints + Column Presets + Incremental Pulls + Mac Scheduler</div>
           </div>
         </div>
-
-        <div>
-          <h3 style="margin-top:0;">Columns <span class="small" id="activeEndpointLabel"></span></h3>
-
-          <div class="row">
-            <label class="cb" title="Only pull changes since last successful run">
-              <input type="checkbox" id="incrementalToggle" checked />
-              <span>Incremental</span>
-            </label>
-
-            <button onclick="selectAllCols()">Select all</button>
-            <button onclick="selectNoCols()">Select none</button>
-            <button onclick="savePreset()">Save preset</button>
-            <button type="button" id="runBtn" onclick="runSelected()">Run</button>
-          </div>
-
-          <div class="small" id="watermarkLine" style="margin-top:8px;"></div>
-          <div class="cols" id="columnsGrid" style="margin-top:12px;"></div>
+      </div>
+      <div class="card-body">
+        <div class="row" style="margin-bottom: 12px;">
+          <span class="pill pill-neutral" id="tenantPill">Tenant: (loading…)</span>
+          <span class="pill pill-neutral" id="tokenPill">Token: (loading…)</span>
+        </div>
+        <div class="row">
+          <button type="button" class="btn btn-secondary btn-md" onclick="refreshStatus()">Refresh Status</button>
+          <a href="/api/download_excel" class="btn-link" download="xero_endpoints.xlsx">Download Excel</a>
+          <button type="button" class="btn btn-secondary btn-md" onclick="openExcel()">Open Excel File</button>
+          <button type="button" class="btn btn-primary btn-md" onclick="reauthorize()">Re-authorize</button>
         </div>
       </div>
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0;">Scheduler (Mac launchd)</h3>
-      <div class="row">
-        <label class="cb">
-          <input type="checkbox" id="schedEnabled" />
-          <span>Enable schedule</span>
-        </label>
-
-        <span class="small">Every</span>
-        <input type="number" id="schedMinutes" min="1" value="720" style="width:110px;" />
-        <span class="small">minutes</span>
-
-        <label class="cb">
-          <input type="checkbox" id="schedIncremental" checked />
-          <span>Incremental</span>
-        </label>
-
-        <button onclick="saveSchedule()">Save schedule</button>
-        <button onclick="generateSchedulerFiles()">Generate LaunchAgent</button>
+      <div class="card-body">
+        <div class="grid">
+          <div>
+            <h2 class="h2" style="margin-bottom: 10px;">Endpoints</h2>
+            <div class="list" id="endpointList"></div>
+            <div class="small" style="margin-top: 10px;">
+              Excel: <code>data/xero_endpoints.xlsx</code>
+            </div>
+          </div>
+          <div>
+            <h2 class="h2" style="margin-bottom: 10px;">Columns <span class="small" id="activeEndpointLabel"></span></h2>
+            <div class="row">
+              <label class="cb" title="Only pull changes since last successful run">
+                <input type="checkbox" id="incrementalToggle" checked />
+                <span>Incremental</span>
+              </label>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="selectAllCols()">Select all</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="selectNoCols()">Select none</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="savePreset()">Save preset</button>
+              <button type="button" class="btn btn-primary btn-md" id="runBtn" onclick="runSelected()">Run</button>
+            </div>
+            <div class="small" id="watermarkLine" style="margin-top: 8px;"></div>
+            <div class="cols" id="columnsGrid" style="margin-top: 12px;"></div>
+          </div>
+        </div>
       </div>
-
-      <div class="small" style="margin-top:10px;">
-        Select endpoints to schedule (uses your presets):
-      </div>
-      <div class="row" id="schedEndpointChecks" style="margin-top:8px;"></div>
-
-      <pre id="scheduleOut">(not generated yet)</pre>
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0;">Latest Output</h3>
-      <pre id="out">(nothing yet)</pre>
+      <div class="card-header">
+        <h2 class="h2">Scheduler (Mac launchd)</h2>
+      </div>
+      <div class="card-body">
+        <div class="row">
+          <label class="cb">
+            <input type="checkbox" id="schedEnabled" />
+            <span>Enable schedule</span>
+          </label>
+          <span class="small">Every</span>
+          <input type="number" class="input" id="schedMinutes" min="1" value="720" style="width: 110px;" />
+          <span class="small">minutes</span>
+          <label class="cb">
+            <input type="checkbox" id="schedIncremental" checked />
+            <span>Incremental</span>
+          </label>
+          <button type="button" class="btn btn-secondary btn-md" onclick="saveSchedule()">Save schedule</button>
+          <button type="button" class="btn btn-primary btn-md" onclick="generateSchedulerFiles()">Generate LaunchAgent</button>
+        </div>
+        <div class="small" style="margin-top: 10px;">
+          Select endpoints to schedule (uses your presets):
+        </div>
+        <div class="row" id="schedEndpointChecks" style="margin-top: 8px;"></div>
+        <pre id="scheduleOut" style="margin-top: 12px;">(not generated yet)</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Latest Output</h2>
+      </div>
+      <div class="card-body">
+        <pre id="out">(nothing yet)</pre>
+      </div>
     </div>
   </div>
+{% endblock %}
 
+{% block scripts %}
 <script>
 let activeEndpoint = null;
 let allEndpoints = [];
 
 async function reauthorize(){
-  // 1) delete token
   let r1 = await fetch('/api/auth/reset', {method:'POST'});
   let j1 = await r1.json();
   document.getElementById('out').textContent = JSON.stringify(j1, null, 2);
 
-  // 2) get authorize URL
   let r2 = await fetch('/api/auth/start');
   let j2 = await r2.json();
   document.getElementById('out').textContent = JSON.stringify(j2, null, 2);
@@ -146,18 +125,16 @@ async function loadEndpoints(){
   const j = await r.json();
   allEndpoints = j.endpoints || [];
 
-  // Left list
   const list = document.getElementById('endpointList');
   list.innerHTML = '';
   allEndpoints.forEach(name => {
     const btn = document.createElement('button');
-    btn.className = 'endpointBtn';
+    btn.className = 'btn btn-secondary btn-sm endpointBtn';
     btn.textContent = name;
     btn.onclick = () => setActiveEndpoint(name);
     list.appendChild(btn);
   });
 
-  // Scheduler checks
   const sched = document.getElementById('schedEndpointChecks');
   sched.innerHTML = '';
   allEndpoints.forEach(name => {
@@ -193,7 +170,6 @@ async function setActiveEndpoint(name){
   const grid = document.getElementById('columnsGrid');
   grid.innerHTML = '';
 
-  // which cols selected?
   const selected = new Set(preset && Array.isArray(preset) ? preset : cols);
 
   cols.forEach(c => {
@@ -355,9 +331,7 @@ async function generateSchedulerFiles(){
   document.getElementById('scheduleOut').textContent = JSON.stringify(j, null, 2);
 }
 
-// init
 refreshStatus();
 loadEndpoints().then(loadSchedule);
 </script>
-</body>
-</html>
+{% endblock %}
