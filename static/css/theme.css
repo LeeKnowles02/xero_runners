@@ -1,0 +1,89 @@
+:root {
+  --brand: #d10f1f;
+  --brand-600: #b90d1b;
+  --brand-100: #ffe5e8;
+
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --text: #111827;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+
+  --success: #16a34a;
+  --warning: #f59e0b;
+  --danger: #dc2626;
+  --info: #2563eb;
+
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.10);
+
+  --container-max: 1200px;
+
+  --h1: 28px;
+  --h2: 20px;
+  --h3: 16px;
+  --body: 14px;
+}
+
+/* Dark theme – applied when html has data-theme="dark" */
+[data-theme="dark"] {
+  --brand: #e63946;
+  --brand-600: #d10f1f;
+  --brand-100: #3d1a1e;
+
+  --bg: #0f1117;
+  --surface: #181b23;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --border: #2d323d;
+
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #3b82f6;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .nav a:hover {
+  background: #252830;
+  border-color: var(--border);
+}
+
+[data-theme="dark"] thead {
+  background: #1e2129;
+}
+
+[data-theme="dark"] th.sortable:hover {
+  background: #252830;
+}
+
+[data-theme="dark"] .btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] .btn-secondary:hover {
+  background: #252830;
+}
+
+[data-theme="dark"] .btn-ghost:hover {
+  background: #252830;
+}
+
+[data-theme="dark"] .input,
+[data-theme="dark"] .select {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+[data-theme="dark"] .pill-neutral {
+  background: #252830;
+  color: var(--muted);
+  border-color: var(--border);
+}

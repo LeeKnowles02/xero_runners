@@ -881,6 +881,81 @@ def _fetch_journals_offset(
 
     return out_items, reached_cutoff
 
+
+def extract_journal_line_rows(journal_obj: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Flatten a single Journal object into JournalLines-shaped rows.
+    Reused by test orchestration and normal JournalLines run logic.
+    """
+    out: List[Dict[str, Any]] = []
+    source_type = journal_obj.get("SourceType")
+    source_id = journal_obj.get("SourceID")
+    for line in (journal_obj.get("JournalLines", []) or []):
+        line2 = dict(line) if isinstance(line, dict) else {"_raw": line}
+        if line2.get("LineAmount") in (None, ""):
+            fallback_amt = line2.get("NetAmount")
+            if fallback_amt in (None, ""):
+                fallback_amt = line2.get("GrossAmount")
+            if fallback_amt in (None, ""):
+                fallback_amt = line2.get("Amount")
+            if fallback_amt not in (None, ""):
+                line2["LineAmount"] = fallback_amt
+        out.append({
+            "JournalID": journal_obj.get("JournalID"),
+            "JournalNumber": journal_obj.get("JournalNumber"),
+            "JournalDate": journal_obj.get("JournalDate"),
+            "SourceType": source_type,
+            "SourceID": source_id,
+            "JournalLine": line2,
+        })
+    return out
+
+
+def fetch_journal_lines_sample(
+    headers: Dict[str, str],
+    max_journals: int = 10,
+    start_after: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[int]]:
+    """
+    Fetch a small journal sample and flatten into JournalLines rows.
+    Returns: (journals, line_rows, next_start_after)
+    """
+    url = f"{XERO_API_BASE}/Journals"
+    params: Dict[str, Any] = {}
+    if start_after is not None:
+        params["offset"] = start_after
+
+    r = _get_json(url, headers=headers, params=params)
+    j = r.json()
+    journals = (j.get("Journals", []) if isinstance(j, dict) else []) or []
+    journals = journals[:max(0, int(max_journals or 0))]
+
+    full_journals: List[Dict[str, Any]] = []
+    line_rows: List[Dict[str, Any]] = []
+    last_journal_number: Optional[int] = None
+
+    for item in journals:
+        journal_id = item.get("JournalID")
+        if not journal_id:
+            continue
+        detail_url = f"{XERO_API_BASE}/Journals/{journal_id}"
+        detail_resp = _get_json(detail_url, headers=headers)
+        detail_json = detail_resp.json()
+        if isinstance(detail_json, dict) and detail_json.get("Journals"):
+            full_journal = detail_json["Journals"][0]
+        elif isinstance(detail_json, dict) and detail_json.get("Journal"):
+            full_journal = detail_json["Journal"]
+        else:
+            full_journal = item
+        full_journals.append(full_journal)
+        line_rows.extend(extract_journal_line_rows(full_journal))
+        try:
+            last_journal_number = int(full_journal.get("JournalNumber"))
+        except Exception:
+            pass
+
+    return full_journals, line_rows, last_journal_number
+
 # ---------------------------
 # JournalLines: checkpoint helpers
 # ---------------------------
@@ -950,6 +1025,9 @@ def run_endpoint_selected(
     excel_path: str,
     selected_columns: Optional[List[str]] = None,
     incremental_since_iso: Optional[str] = None,
+    mode: str = "full",
+    max_journals: Optional[int] = None,
+    start_after: Optional[int] = None,
 ) -> Tuple[int, str, str, Optional[str]]:
     """
     Returns: (rows_written, status, mode, error)
@@ -967,6 +1045,18 @@ def run_endpoint_selected(
             raise ValueError(f"Invalid columns for {endpoint_name}: {bad}")
 
         assert "xero-tenant-id" in headers and headers["xero-tenant-id"], "Missing tenant id"
+
+        if endpoint_name == "JournalLines" and mode in {"sample_test", "incremental_control", "incremental_batch"}:
+            journals, line_rows, checkpoint = fetch_journal_lines_sample(
+                headers=headers,
+                max_journals=int(max_journals or 10),
+                start_after=start_after,
+            )
+            mode_label = f"{mode} start_after={start_after} next={checkpoint}"
+            append_run_log(wb, endpoint_name, mode_label, len(line_rows), "OK", None)
+            save_workbook_atomic(wb, excel_path)
+            logger.info("JournalLines test mode=%s journals=%s lines=%s", mode, len(journals), len(line_rows))
+            return len(line_rows), "OK", mode_label, None
 
         # -----------------------
         # Journals: bulletproof run
@@ -1228,7 +1318,7 @@ def run_endpoint_selected(
                     ws_proc.append([jid, jnum, cdu, hhash, utc_now_iso(), 0])
                     proc_appended += 1
                 else:
-                    rows = _detail_to_rows(jobj)
+                    rows = extract_journal_line_rows(jobj)
                     buffer.extend(rows)
                     ws_proc.append([jid, jnum, cdu, hhash, utc_now_iso(), len(rows)])
                     proc_appended += 1
@@ -1323,10 +1413,10 @@ def run_endpoint_selected(
         raise ValueError(f"Unknown endpoint: {endpoint_name}")
 
     except Exception as e:
-        mode = "FULL" if not incremental_since_iso else f"INCREMENTAL since {incremental_since_iso}"
-        append_run_log(wb, endpoint_name, mode, 0, "FAILED", str(e))
+        mode_label = mode if mode != "full" else ("FULL" if not incremental_since_iso else f"INCREMENTAL since {incremental_since_iso}")
+        append_run_log(wb, endpoint_name, mode_label, 0, "FAILED", str(e))
         backup_dir = os.path.join(os.path.dirname(excel_path), "backups")
         backup_file(excel_path, backup_dir, f"excel_before_{excel_safe_sheet_name(endpoint_name)}_FAILED")
         save_workbook_atomic(wb, excel_path)
-        logger.exception("Run failed for %s (mode=%s)", endpoint_name, mode)
-        return 0, "FAILED", mode, str(e)
+        logger.exception("Run failed for %s (mode=%s)", endpoint_name, mode_label)
+        return 0, "FAILED", mode_label, str(e)
