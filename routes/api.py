@@ -21,9 +21,104 @@ from xero_jobs import (
     backup_file,
     workbook_with_only_sheet,
 )
+from xero_db import test_database_connection_and_seed, clear_connection_test_data, get_pipeline_history
+from xero_test import run_sample_db_test, run_incremental_validation_test, clear_test_rows
+
+
+def _pipeline_xero_auth_error(e: Exception, logger) -> tuple:
+    msg = str(e)
+    if "No tokens found" in msg or "interactive auth" in msg.lower():
+        hint = " Complete OAuth first: open Dashboard and click **Re-authorize**."
+        return (
+            {
+                "ok": False,
+                "status": "FAIL",
+                "error": msg + hint,
+            },
+            401,
+        )
+    return None
 
 
 def register_api(app, xero, state, logger):
+    @app.post("/api/pipeline/db_connection_test")
+    def api_pipeline_db_connection_test():
+        try:
+            result = test_database_connection_and_seed()
+            return jsonify({"ok": True, "status": "PASS", **result})
+        except Exception as e:
+            logger.exception("Database connection test failed")
+            return jsonify({"ok": False, "status": "FAIL", "error": str(e)}), 500
+
+    @app.post("/api/pipeline/clear_connection_test")
+    def api_pipeline_clear_connection_test():
+        try:
+            clear_connection_test_data()
+            return jsonify({"ok": True, "status": "PASS", "message": "Connection test data cleared."})
+        except Exception as e:
+            logger.exception("Clear connection test data failed")
+            return jsonify({"ok": False, "status": "FAIL", "error": str(e)}), 500
+
+    @app.post("/api/pipeline/sample_db_test")
+    def api_pipeline_sample_db_test():
+        payload = request.get_json(force=True) or {}
+        endpoint = payload.get("endpoint") or "JournalLines"
+        try:
+            headers = xero.headers()
+            result = run_sample_db_test(headers=headers, endpoint_name=endpoint, max_journals=10)
+            return jsonify({"ok": True, **result})
+        except Exception as e:
+            auth = _pipeline_xero_auth_error(e, logger)
+            if auth:
+                return jsonify(auth[0]), auth[1]
+            logger.exception("Sample DB test failed")
+            return jsonify({"ok": False, "status": "FAIL", "error": str(e)}), 500
+
+    @app.post("/api/pipeline/incremental_validation_test")
+    def api_pipeline_incremental_validation_test():
+        payload = request.get_json(force=True) or {}
+        endpoint = payload.get("endpoint") or "JournalLines"
+        try:
+            headers = xero.headers()
+            result = run_incremental_validation_test(headers=headers, endpoint_name=endpoint)
+            return jsonify({"ok": result.get("status") == "PASS", **result})
+        except Exception as e:
+            auth = _pipeline_xero_auth_error(e, logger)
+            if auth:
+                return jsonify(auth[0]), auth[1]
+            logger.exception("Incremental validation test failed")
+            return jsonify({"ok": False, "status": "FAIL", "error": str(e)}), 500
+
+    @app.post("/api/pipeline/clear_test_rows")
+    def api_pipeline_clear_test_rows():
+        payload = request.get_json(force=True) or {}
+        endpoint = payload.get("endpoint") or "JournalLines"
+        try:
+            result = clear_test_rows(endpoint_name=endpoint)
+            return jsonify({"ok": True, **result})
+        except Exception as e:
+            logger.exception("Clear test rows failed")
+            return jsonify({"ok": False, "status": "FAIL", "error": str(e)}), 500
+
+    @app.get("/api/pipeline/history")
+    def api_pipeline_history():
+        limit = int(request.args.get("limit", "20"))
+        try:
+            history = get_pipeline_history(limit=limit)
+            return jsonify({"ok": True, "status": "PASS", **history})
+        except Exception as e:
+            logger.exception("Load pipeline history failed")
+            return jsonify(
+                {
+                    "ok": False,
+                    "status": "FAIL",
+                    "error": str(e),
+                    "runs": [],
+                    "assessments": [],
+                    "history_notes": [str(e)],
+                }
+            ), 500
+
     @app.get("/api/status")
     def api_status():
         token_state = "missing"

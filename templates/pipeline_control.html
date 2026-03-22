@@ -1,0 +1,287 @@
+{% extends 'layout.html' %}
+{% block title %}Data Pipeline Control | Xero Runner{% endblock %}
+
+{% block content %}
+  <div class="stack-24">
+    <div class="stack-6">
+      <h1 class="h1">Data Pipeline Control</h1>
+      <div class="muted">Safe, UI-driven test controls for database and endpoint validation.</div>
+      <div class="muted small" style="margin-top: 8px; max-width: 900px;">
+        <strong>SQL:</strong> If your login cannot create objects (error <code>262</code>), run
+        <code>sql/setup_pipeline_test_objects.sql</code> and <code>sql/setup_xero_schema.sql</code> in SSMS as a DBA.
+        <strong>Xero:</strong> Endpoint tests need a saved token — use <strong>Dashboard → Re-authorize</strong> first.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Database Connection Test</h2>
+      </div>
+      <div class="card-body">
+        <div class="row">
+          <button type="button" class="btn btn-primary btn-md" onclick="testDbConnection()">Test Database Connection</button>
+          <button type="button" class="btn btn-secondary btn-md" onclick="clearConnectionTestData()">Clear Connection Test Data</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Endpoint DB Test</h2>
+      </div>
+      <div class="card-body">
+        <div class="row">
+          <label class="small">Select Endpoint</label>
+          <select id="endpointSelect" class="input" style="width: 220px;">
+            <option value="JournalLines">JournalLines</option>
+          </select>
+          <button type="button" class="btn btn-primary btn-md" onclick="runSampleDbTest()">Run Sample DB Test</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Incremental Validation Test</h2>
+      </div>
+      <div class="card-body">
+        <div class="row">
+          <button type="button" class="btn btn-primary btn-md" onclick="runIncrementalTest()">Run Incremental Test (20 vs 10 + 10)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Clear TEST Data</h2>
+      </div>
+      <div class="card-body">
+        <div class="row">
+          <button type="button" class="btn btn-secondary btn-md" onclick="clearTestRows()">Clear TEST Rows</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Latest Test Result</h2>
+      </div>
+      <div class="card-body">
+        <div class="row" style="margin-bottom: 10px;">
+          <span class="pill pill-neutral" id="statusPill">Status: (none)</span>
+          <span class="pill pill-neutral" id="runRefPill">Last RunRef: (none)</span>
+          <span class="pill pill-neutral" id="rowsPill">Rows: (none)</span>
+        </div>
+        <pre id="testOut">(no test run yet)</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Last Run History</h2>
+      </div>
+      <div class="card-body">
+        <div class="row" style="margin-bottom: 8px;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="loadHistory()">Refresh History</button>
+        </div>
+        <div id="historyNotes" class="muted small" style="margin-bottom: 12px; display: none;"></div>
+        <div class="small" style="margin-bottom: 8px;">Recent TestRunLog entries</div>
+        <div id="runHistoryOut" class="table-wrap" style="margin-bottom: 12px;">(loading…)</div>
+        <div class="small" style="margin: 10px 0 8px;">Recent TestAssessmentLog entries</div>
+        <div id="assessmentHistoryOut" class="table-wrap">(loading…)</div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function setResult(j){
+  const status = j.status || (j.ok ? 'PASS' : 'FAIL');
+  const runRef = j.run_ref || (j.run_refs ? j.run_refs.assessment : null);
+  const rows = j.rows_written || j.row_counts || null;
+  document.getElementById('statusPill').textContent = 'Status: ' + (status || '(unknown)');
+  document.getElementById('runRefPill').textContent = 'Last RunRef: ' + (runRef || '(none)');
+  document.getElementById('rowsPill').textContent = 'Rows: ' + (typeof rows === 'object' ? JSON.stringify(rows) : (rows ?? '(none)'));
+  document.getElementById('testOut').textContent = JSON.stringify(j, null, 2);
+}
+
+function escapeHtml(s){
+  if (s == null || s === '') return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+function compareHistory(a, b, key, type, dir){
+  const va = a[key];
+  const vb = b[key];
+  let cmp = 0;
+  if (type === 'number') {
+    const na = Number(va);
+    const nb = Number(vb);
+    cmp = (isNaN(na) ? 0 : na) - (isNaN(nb) ? 0 : nb);
+  } else if (type === 'datetime') {
+    const ta = va ? Date.parse(va) : 0;
+    const tb = vb ? Date.parse(vb) : 0;
+    cmp = (isNaN(ta) ? 0 : ta) - (isNaN(tb) ? 0 : tb);
+  } else {
+    cmp = String(va ?? '').localeCompare(String(vb ?? ''), undefined, { sensitivity: 'base' });
+  }
+  return dir === 'desc' ? -cmp : cmp;
+}
+
+function renderSortableHistoryTable(container, rows, columns){
+  if (!rows || !rows.length) {
+    container.innerHTML = '<p class="muted" style="margin: 12px;">(none)</p>';
+    return;
+  }
+  const state = { sortKey: columns[0].key, sortDir: 'desc' };
+
+  function arrowFor(key){
+    if (key !== state.sortKey) return '';
+    return state.sortDir === 'asc' ? ' \u25B2' : ' \u25BC';
+  }
+
+  function buildTbody(){
+    const sorted = rows.slice().sort((a, b) =>
+      compareHistory(a, b, state.sortKey, columns.find(c => c.key === state.sortKey).sort || 'string', state.sortDir)
+    );
+    return sorted.map(r => {
+      const cells = columns.map(c => {
+        const raw = r[c.key];
+        const str = raw == null ? '' : String(raw);
+        const useTruncate = c.truncate;
+        const cls = useTruncate ? ' class="cell-truncate"' : '';
+        const titleAttr = useTruncate && str ? ' title="' + escapeHtml(str) + '"' : '';
+        return '<td' + cls + titleAttr + '>' + escapeHtml(str) + '</td>';
+      }).join('');
+      return '<tr>' + cells + '</tr>';
+    }).join('');
+  }
+
+  function render(){
+    const thead = '<thead><tr>' + columns.map(c =>
+      '<th scope="col" class="sortable" data-key="' + escapeHtml(c.key) + '">' + escapeHtml(c.label + arrowFor(c.key)) + '</th>'
+    ).join('') + '</tr></thead>';
+    const tbody = '<tbody>' + buildTbody() + '</tbody>';
+    container.innerHTML = '<table>' + thead + tbody + '</table>';
+
+    container.querySelectorAll('th.sortable').forEach(th => {
+      th.addEventListener('click', function(){
+        const key = th.getAttribute('data-key');
+        if (state.sortKey === key) {
+          state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortKey = key;
+          const col = columns.find(c => c.key === key);
+          state.sortDir = (col && col.defaultDir) ? col.defaultDir : 'asc';
+        }
+        render();
+      });
+    });
+  }
+
+  render();
+}
+
+async function loadHistory(){
+  const runEl = document.getElementById('runHistoryOut');
+  const assessEl = document.getElementById('assessmentHistoryOut');
+  const notesEl = document.getElementById('historyNotes');
+  try {
+    const r = await fetch('/api/pipeline/history?limit=20');
+    let j = {};
+    try { j = await r.json(); } catch (_) {}
+    if (notesEl) {
+      if (j.history_notes && j.history_notes.length) {
+        notesEl.style.display = 'block';
+        notesEl.innerHTML = '<strong>Notes:</strong><br>' + j.history_notes.map(function(n){ return escapeHtml(n); }).join('<br>');
+      } else if (!r.ok && j.error) {
+        notesEl.style.display = 'block';
+        notesEl.innerHTML = '<strong>Error:</strong> ' + escapeHtml(j.error);
+      } else {
+        notesEl.style.display = 'none';
+        notesEl.innerHTML = '';
+      }
+    }
+    const runCols = [
+      {key:'created_at', label:'CreatedAt', sort:'datetime', defaultDir:'desc'},
+      {key:'endpoint_name', label:'Endpoint', sort:'string'},
+      {key:'status', label:'Status', sort:'string'},
+      {key:'rows_written', label:'Rows', sort:'number'},
+      {key:'run_ref', label:'RunRef', sort:'string', truncate:true},
+      {key:'details', label:'Details', sort:'string', truncate:true}
+    ];
+    const assessCols = [
+      {key:'created_at', label:'CreatedAt', sort:'datetime', defaultDir:'desc'},
+      {key:'status', label:'Status', sort:'string'},
+      {key:'run_ref', label:'RunRef', sort:'string', truncate:true},
+      {key:'summary', label:'Summary', sort:'string', truncate:true}
+    ];
+    renderSortableHistoryTable(runEl, j.runs || [], runCols);
+    renderSortableHistoryTable(assessEl, j.assessments || [], assessCols);
+  } catch (e) {
+    if (notesEl) {
+      notesEl.style.display = 'none';
+      notesEl.innerHTML = '';
+    }
+    runEl.innerHTML = '<p class="muted" style="margin: 12px;">Failed to load history: ' + escapeHtml(e.message || String(e)) + '</p>';
+    assessEl.innerHTML = '<p class="muted" style="margin: 12px;">(error)</p>';
+  }
+}
+
+async function postJson(url, payload){
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload || {})
+  });
+  const text = await r.text();
+  let j = {};
+  try { j = JSON.parse(text); } catch (_) { j = {status:'FAIL', error:text}; }
+  if (!r.ok && !j.status) j.status = 'FAIL';
+  return j;
+}
+
+async function testDbConnection(){
+  setResult({status:'RUNNING', message:'Testing database connection...'});
+  const j = await postJson('/api/pipeline/db_connection_test', {});
+  setResult(j);
+  await loadHistory();
+}
+
+async function clearConnectionTestData(){
+  setResult({status:'RUNNING', message:'Clearing connection test rows...'});
+  const j = await postJson('/api/pipeline/clear_connection_test', {});
+  setResult(j);
+  await loadHistory();
+}
+
+async function runSampleDbTest(){
+  const endpoint = document.getElementById('endpointSelect').value;
+  setResult({status:'RUNNING', message:'Running sample DB test...'});
+  const j = await postJson('/api/pipeline/sample_db_test', {endpoint});
+  setResult(j);
+  await loadHistory();
+}
+
+async function runIncrementalTest(){
+  const endpoint = document.getElementById('endpointSelect').value;
+  setResult({status:'RUNNING', message:'Running incremental validation test...'});
+  const j = await postJson('/api/pipeline/incremental_validation_test', {endpoint});
+  setResult(j);
+  await loadHistory();
+}
+
+async function clearTestRows(){
+  const endpoint = document.getElementById('endpointSelect').value;
+  setResult({status:'RUNNING', message:'Clearing TEST rows...'});
+  const j = await postJson('/api/pipeline/clear_test_rows', {endpoint});
+  setResult(j);
+  await loadHistory();
+}
+
+loadHistory();
+</script>
+{% endblock %}

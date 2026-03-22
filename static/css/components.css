@@ -368,6 +368,23 @@ th {
     color: var(--text);
 }
 
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+th.sortable:hover {
+    background: #f3f4f6;
+}
+
+td.cell-truncate {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .row {
     display: flex;
     flex-wrap: wrap;
