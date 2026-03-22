@@ -52,8 +52,10 @@ class FileTokenStore:
     def save(self, tokens: XeroTokens) -> None:
         with self._lock:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path, "w", encoding="utf-8") as f:
+            tmp = f"{self.path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(tokens.__dict__, f, indent=2)
+            os.replace(tmp, self.path)
 
 
 class XeroAuth:
@@ -109,7 +111,7 @@ class XeroAuth:
 
         self.tokens = XeroTokens(
             access_token=j["access_token"],
-            refresh_token=j.get("refresh_token"),
+            refresh_token=j.get("refresh_token") or self.tokens.refresh_token,
             expires_at=_now() + expires_in - 30,
             scope=j.get("scope"),
             token_type=j.get("token_type"),
@@ -155,12 +157,13 @@ class XeroAuth:
 
 def default_token_path() -> str:
     """
-    Where xero_runner stores tokens by default.
+    Default token path for xero_runner.
     Override by setting env var XERO_TOKEN_PATH.
     """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     return os.environ.get(
         "XERO_TOKEN_PATH",
-        os.path.join(os.path.expanduser("~"), ".xero_runner", "tokens.json"),
+        os.path.join(base_dir, "data", "xero_tokens.json"),
     )
 
 
@@ -172,8 +175,6 @@ def refresh_token_file_inplace(
     """
     Refreshes the access token using refresh_token from the token file,
     then writes the updated tokens back to the SAME file.
-
-    This is safe to call from xero_jobs.py during long runs.
     """
     store = FileTokenStore(token_path)
     tokens = store.load()
@@ -190,7 +191,7 @@ def refresh_token_file_inplace(
 
     new_tokens = XeroTokens(
         access_token=j["access_token"],
-        refresh_token=j.get("refresh_token"),
+        refresh_token=j.get("refresh_token") or tokens.refresh_token,
         expires_at=_now() + expires_in - 30,
         scope=j.get("scope"),
         token_type=j.get("token_type"),
@@ -218,13 +219,11 @@ def headers_from_token_file(
     if not tokens or not tokens.access_token:
         raise RuntimeError(f"No access token in token file: {path}")
 
-    # If expired, optionally refresh in-place (requires secrets)
     if _now() >= int(tokens.expires_at):
         cid = client_id or os.environ.get("XERO_CLIENT_ID")
         csec = client_secret or os.environ.get("XERO_CLIENT_SECRET")
         if cid and csec:
             tokens = refresh_token_file_inplace(path, cid, csec)
-        # If secrets not available, we return what we have (caller may still fail with 401)
 
     return {
         "Authorization": f"Bearer {tokens.access_token}",

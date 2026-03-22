@@ -159,6 +159,7 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
 def iso_to_dt(s: str) -> datetime:
     """
     Accepts:
@@ -179,6 +180,7 @@ def iso_to_dt(s: str) -> datetime:
         dt = dt.astimezone(timezone.utc)
     return dt
 
+
 def parse_xero_date_maybe(val: Any) -> Any:
     if not isinstance(val, str):
         return val
@@ -188,6 +190,7 @@ def parse_xero_date_maybe(val: Any) -> Any:
     ms = int(m.group(1))
     dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def _dt_from_created_date_maybe(val: Any) -> Optional[datetime]:
     """
@@ -208,10 +211,12 @@ def _dt_from_created_date_maybe(val: Any) -> Optional[datetime]:
 # ---------------------------
 _INVALID_SHEET_CHARS = r'[:\\/?*\[\]]'
 
+
 def excel_safe_sheet_name(name: str) -> str:
     s = re.sub(_INVALID_SHEET_CHARS, "-", (name or "").strip())
     s = s[:31].rstrip()
     return s or "Sheet"
+
 
 def excel_unique_sheet_name(wb, desired: str) -> str:
     base = excel_safe_sheet_name(desired)
@@ -225,6 +230,7 @@ def excel_unique_sheet_name(wb, desired: str) -> str:
             return candidate
     return base[:28] + "_X"
 
+
 def ensure_excel(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path):
@@ -235,8 +241,10 @@ def ensure_excel(path: str) -> None:
     ws.append(["TimestampUTC", "Endpoint", "Mode", "RowsWritten", "Status", "Error"])
     wb.save(path)
 
+
 def _utc_ts_compact() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
 
 def backup_file(path: str, backup_dir: str, tag: str) -> Optional[str]:
     try:
@@ -253,12 +261,14 @@ def backup_file(path: str, backup_dir: str, tag: str) -> Optional[str]:
         logger.warning("Backup failed for %s: %s", path, e)
         return None
 
+
 def save_workbook_atomic(wb, excel_path: str) -> None:
     d = os.path.dirname(excel_path)
     os.makedirs(d, exist_ok=True)
     tmp_path = os.path.join(d, f".tmp_{os.getpid()}_{_utc_ts_compact()}_{os.path.basename(excel_path)}")
     wb.save(tmp_path)
     os.replace(tmp_path, excel_path)
+
 
 def autosize_columns(ws, max_width: int = 60):
     for col_idx, col in enumerate(ws.columns, start=1):
@@ -269,10 +279,12 @@ def autosize_columns(ws, max_width: int = 60):
             length = max(length, len(str(cell.value)))
         ws.column_dimensions[get_column_letter(col_idx)].width = min(max(10, length + 2), max_width)
 
+
 def append_run_log(wb, endpoint: str, mode: str, rows_written: int, status: str, error: Optional[str]) -> None:
     ws = wb["Runs"]
     ws.append([utc_now_iso(), endpoint, mode, rows_written, status, error or ""])
     autosize_columns(ws)
+
 
 def list_endpoints() -> List[str]:
     return list(ENDPOINTS.keys())
@@ -302,10 +314,12 @@ def workbook_with_only_sheet(excel_path: str, endpoint_name: str) -> Optional[By
     buf.seek(0)
     return buf
 
+
 def endpoint_columns(endpoint_name: str) -> List[str]:
     if endpoint_name not in ENDPOINTS:
         raise ValueError(f"Unknown endpoint: {endpoint_name}")
     return ENDPOINTS[endpoint_name]["columns"]
+
 
 # ---- minimal inserts for JournalLines completeness ----
 def _ensure_sheet(wb, sheet_name: str, columns: List[str]):
@@ -316,6 +330,7 @@ def _ensure_sheet(wb, sheet_name: str, columns: List[str]):
     ws = wb[sheet_name]
     _ensure_sheet_header(ws, columns)
     return ws
+
 
 def _load_first_col_set(ws) -> Set[str]:
     out: Set[str] = set()
@@ -335,6 +350,7 @@ def _stable_hash(parts: List[Any]) -> str:
     payload = "\x1f".join("" if p is None else str(p).strip() for p in parts)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
+
 def _journals_header_hash_from_row_values(row_values: List[Any], columns: List[str]) -> str:
     """
     Compute a stable hash of the Journals header row.
@@ -345,6 +361,7 @@ def _journals_header_hash_from_row_values(row_values: List[Any], columns: List[s
     include_idxs = [i for i, c in enumerate(columns) if c != "JournalID"]
     parts = [row_values[i] if i < len(row_values) else None for i in include_idxs]
     return _stable_hash(parts)
+
 
 def _load_journals_header_map(ws_journals, columns: List[str]) -> Dict[str, Dict[str, Any]]:
     """
@@ -366,6 +383,7 @@ def _load_journals_header_map(ws_journals, columns: List[str]) -> Dict[str, Dict
         }
     return out
 
+
 def _max_created_date_from_journals_sheet(ws_journals, journals_cols: List[str]) -> Optional[datetime]:
     """
     Scans CreatedDateUTC column in Journals sheet; returns max datetime (UTC).
@@ -385,6 +403,7 @@ def _max_created_date_from_journals_sheet(ws_journals, journals_cols: List[str])
         if max_dt is None or dt > max_dt:
             max_dt = dt
     return max_dt
+
 
 def _journal_number_set_from_sheet(ws_journals, journals_cols: List[str]) -> Set[int]:
     """
@@ -406,6 +425,7 @@ def _journal_number_set_from_sheet(ws_journals, journals_cols: List[str]) -> Set
         except Exception:
             continue
     return out
+
 
 def _detect_discontinuity(journal_numbers: Set[int]) -> bool:
     """
@@ -441,6 +461,7 @@ def get_by_path(obj: Dict[str, Any], path: str) -> Any:
         return str(cur)
     return cur
 
+
 def _ensure_sheet_header(ws, columns: List[str]) -> None:
     if ws.max_row == 0:
         ws.append(columns)
@@ -450,6 +471,7 @@ def _ensure_sheet_header(ws, columns: List[str]) -> None:
         if existing != columns:
             ws.delete_rows(1, ws.max_row)
             ws.append(columns)
+
 
 def write_sheet_selected_columns(wb, sheet_name: str, items: List[Dict[str, Any]], columns: List[str]) -> int:
     if sheet_name in wb.sheetnames:
@@ -467,6 +489,7 @@ def write_sheet_selected_columns(wb, sheet_name: str, items: List[Dict[str, Any]
 
     autosize_columns(ws)
     return len(items)
+
 
 def merge_sheet_selected_columns(
     wb,
@@ -530,9 +553,11 @@ def _norm_cell(v: Any) -> str:
     s = str(v)
     return s.strip()
 
+
 def _row_key_from_values(values: List[Any]) -> str:
     payload = "\x1f".join(_norm_cell(v) for v in values)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
 
 def _load_existing_row_keys(ws, columns: List[str]) -> Set[str]:
     keys: Set[str] = set()
@@ -600,42 +625,66 @@ def _fetch_generic_endpoint(
 
     return all_items
 
-def _refresh_headers_after_401(current_headers: Dict[str, str]) -> Optional[Dict[str, str]]:
+
+def _refresh_headers_after_401(
+    current_headers: Dict[str, str],
+    token_path: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
     tenant_id = current_headers.get("xero-tenant-id")
     if not tenant_id:
         return None
     try:
         from xero_auth import headers_from_token_file
-        return headers_from_token_file(tenant_id)
+        return headers_from_token_file(
+            tenant_id=tenant_id,
+            token_path=token_path,
+            client_id=os.environ.get("XERO_CLIENT_ID"),
+            client_secret=os.environ.get("XERO_CLIENT_SECRET"),
+        )
     except Exception as e:
         logger.warning("401 recovery: could not refresh headers from token file (%s)", e)
         return None
 
-def _force_refresh_headers(current_headers: Dict[str, str]) -> Optional[Dict[str, str]]:
+
+def _force_refresh_headers(
+    current_headers: Dict[str, str],
+    token_path: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
     tenant_id = current_headers.get("xero-tenant-id")
     if not tenant_id:
         return None
     try:
-        from xero_auth import refresh_token_file_inplace, headers_from_token_file, default_token_path
+        from xero_auth import refresh_token_file_inplace, headers_from_token_file
         cid = os.environ.get("XERO_CLIENT_ID")
         csec = os.environ.get("XERO_CLIENT_SECRET")
         if not cid or not csec:
             logger.warning("401 force-refresh skipped (missing XERO_CLIENT_ID/SECRET in env)")
             return None
-        token_path = default_token_path()
+        if not token_path:
+            logger.warning("401 force-refresh skipped (missing token_path)")
+            return None
+
         refresh_token_file_inplace(token_path, cid, csec)
-        return headers_from_token_file(tenant_id)
+        return headers_from_token_file(
+            tenant_id=tenant_id,
+            token_path=token_path,
+            client_id=cid,
+            client_secret=csec,
+        )
     except Exception as e:
         logger.warning("401 force-refresh failed (%s)", e)
         return None
 
+
 # Timeout for Xero API calls (seconds). Journals can be slow with large datasets.
 XERO_REQUEST_TIMEOUT = int(os.getenv("XERO_REQUEST_TIMEOUT", "120"))
+
 
 def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None) -> requests.Response:
     max_attempts = 8
     base_sleep = 1.0
     conn_retries = 3  # retry on connection drop (RemoteDisconnected, etc.)
+    token_path = os.environ.get("XERO_TOKEN_PATH")
 
     for attempt in range(1, max_attempts + 1):
         time.sleep(XERO_THROTTLE_SECONDS)
@@ -647,7 +696,10 @@ def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]
             except (RequestsConnectionError, Urllib3ProtocolError, OSError) as conn_err:
                 if conn_attempt < conn_retries - 1:
                     wait = 5 * (conn_attempt + 1)
-                    logger.warning("Connection error (attempt %s/%s), retrying in %ss: %s", conn_attempt + 1, conn_retries, wait, conn_err)
+                    logger.warning(
+                        "Connection error (attempt %s/%s), retrying in %ss: %s",
+                        conn_attempt + 1, conn_retries, wait, conn_err
+                    )
                     time.sleep(wait)
                 else:
                     raise
@@ -656,7 +708,7 @@ def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]
             return r
 
         if r.status_code == 401:
-            new_headers = _refresh_headers_after_401(headers)
+            new_headers = _refresh_headers_after_401(headers, token_path=token_path)
             if new_headers:
                 logger.warning("Xero 401: reloaded Authorization from token file; retrying url=%s", url)
                 headers.update(new_headers)
@@ -667,7 +719,7 @@ def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]
                 if r.status_code == 200:
                     return r
 
-            forced = _force_refresh_headers(headers)
+            forced = _force_refresh_headers(headers, token_path=token_path)
             if forced:
                 logger.warning("Xero 401: forced token refresh; retrying url=%s", url)
                 headers.update(forced)
@@ -913,6 +965,7 @@ def _checkpoint_path_for_excel(excel_path: str) -> str:
     os.makedirs(cdir, exist_ok=True)
     return os.path.join(cdir, JOURNALLINES_CHECKPOINT_NAME)
 
+
 def _load_checkpoint(path: str) -> Optional[Dict[str, Any]]:
     try:
         if not os.path.exists(path):
@@ -922,11 +975,13 @@ def _load_checkpoint(path: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+
 def _save_checkpoint(path: str, data: Dict[str, Any]) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, path)
+
 
 def _delete_checkpoint(path: str) -> None:
     try:
@@ -1195,6 +1250,62 @@ def run_endpoint_selected(
                         return jd["Journal"]
                 return None
 
+            def _detail_to_rows(journal_obj: Dict[str, Any]) -> List[Dict[str, Any]]:
+                out = []
+                source_type = journal_obj.get("SourceType")
+                source_id = journal_obj.get("SourceID")
+
+                # fallback from Journals header sheet when detail payload omits them
+                if source_type in (None, ""):
+                    source_type = next(
+                        (
+                            get_by_path(
+                                {
+                                    "SourceType": ws_journals.cell(row=r, column=journals_cols.index("SourceType") + 1).value
+                                },
+                                "SourceType"
+                            )
+                            for r in range(2, ws_journals.max_row + 1)
+                            if str(ws_journals.cell(row=r, column=1).value) == str(journal_obj.get("JournalID"))
+                        ),
+                        None
+                    )
+
+                if source_id in (None, ""):
+                    source_id = next(
+                        (
+                            get_by_path(
+                                {
+                                    "SourceID": ws_journals.cell(row=r, column=journals_cols.index("SourceID") + 1).value
+                                },
+                                "SourceID"
+                            )
+                            for r in range(2, ws_journals.max_row + 1)
+                            if str(ws_journals.cell(row=r, column=1).value) == str(journal_obj.get("JournalID"))
+                        ),
+                        None
+                    )
+
+                for line in (journal_obj.get("JournalLines", []) or []):
+                    line2 = dict(line) if isinstance(line, dict) else {"_raw": line}
+                    if line2.get("LineAmount") in (None, ""):
+                        fallback_amt = line2.get("NetAmount")
+                        if fallback_amt in (None, ""):
+                            fallback_amt = line2.get("GrossAmount")
+                        if fallback_amt in (None, ""):
+                            fallback_amt = line2.get("Amount")
+                        if fallback_amt not in (None, ""):
+                            line2["LineAmount"] = fallback_amt
+                    out.append({
+                        "JournalID": journal_obj.get("JournalID"),
+                        "JournalNumber": journal_obj.get("JournalNumber"),
+                        "JournalDate": journal_obj.get("JournalDate"),
+                        "SourceType": source_type,
+                        "SourceID": source_id,
+                        "JournalLine": line2,
+                    })
+                return out
+
             for idx in range(start_index, len(pending_ids)):
                 jid = pending_ids[idx]
                 meta = header_map.get(jid, {})
@@ -1238,6 +1349,26 @@ def run_endpoint_selected(
             _delete_checkpoint(checkpoint_path)
             append_run_log(wb, endpoint_name, mode, rows_written, "OK", None)
             save_workbook_atomic(wb, excel_path)
+
+            try:
+                from xero_db import save_endpoint_to_db
+
+                db_rows = []
+                if sheet_name in wb.sheetnames:
+                    ws_db = wb[sheet_name]
+                    if ws_db.max_row >= 2:
+                        headers_row = [c.value for c in ws_db[1]]
+                        for r in range(2, ws_db.max_row + 1):
+                            row_dict = {}
+                            for c_idx, col_name in enumerate(headers_row, start=1):
+                                row_dict[col_name] = ws_db.cell(row=r, column=c_idx).value
+                            db_rows.append(row_dict)
+
+                db_written = save_endpoint_to_db("JournalLines", db_rows, selected_columns)
+                if db_written:
+                    logger.info("JournalLines: wrote %s rows to DB (xero.JournalLines)", db_written)
+            except Exception as db_err:
+                logger.warning("DB write skipped for JournalLines: %s", db_err)
 
             logger.info(
                 "JournalLines fill complete: lines_written=%s journals_touched=%s changed=%s markers_appended=%s",
