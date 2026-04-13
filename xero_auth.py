@@ -80,18 +80,87 @@ class XeroAuth:
 
         self.tokens: Optional[XeroTokens] = self.token_store.load()
         self.tenant_id: Optional[str] = None
+        try:
+            import integration_db_log
+
+            if self.tokens:
+                integration_db_log.log_info(
+                    "OAuth token file loaded; access token present (value not logged)",
+                    event_type="auth.token.loaded",
+                    module_name="xero_auth",
+                    function_name="XeroAuth.__init__",
+                    detail=f"token_path={self.token_store.path}; expires_at_epoch={self.tokens.expires_at}",
+                )
+            else:
+                integration_db_log.log_warning(
+                    "No token file or empty tokens — authorize via Dashboard → Re-authorize",
+                    event_type="auth.token.missing",
+                    module_name="xero_auth",
+                    function_name="XeroAuth.__init__",
+                    detail=f"token_path={self.token_store.path}",
+                )
+        except Exception:
+            pass
 
     def ensure_valid_access_token(self) -> str:
         if not self.tokens:
+            try:
+                import integration_db_log
+
+                integration_db_log.log_error(
+                    "Cannot call Xero API: no tokens on disk. Next: complete OAuth (Re-authorize).",
+                    event_type="auth.token.missing",
+                    module_name="xero_auth",
+                    function_name="ensure_valid_access_token",
+                )
+            except Exception:
+                pass
             raise RuntimeError("No tokens found. Do interactive auth first.")
         if _now() >= self.tokens.expires_at:
             logger.info("Access token expired; refreshing")
+            try:
+                import integration_db_log
+
+                integration_db_log.log_info(
+                    "Access token expired — calling refresh() before API use",
+                    event_type="auth.token.expired",
+                    module_name="xero_auth",
+                    function_name="ensure_valid_access_token",
+                    detail=f"expires_at_epoch={self.tokens.expires_at}; now_epoch={_now()}",
+                )
+            except Exception:
+                pass
             self.refresh()
         return self.tokens.access_token
 
     def refresh(self) -> XeroTokens:
         if not self.tokens or not self.tokens.refresh_token:
+            try:
+                import integration_db_log
+
+                integration_db_log.log_error(
+                    "Refresh aborted: no refresh_token in store — full re-auth required",
+                    event_type="auth.token.refresh.failed",
+                    module_name="xero_auth",
+                    function_name="refresh",
+                )
+            except Exception:
+                pass
             raise RuntimeError("No refresh token available. Re-auth required.")
+
+        try:
+            import integration_db_log
+
+            integration_db_log.log_info(
+                "Token refresh started: POST to identity.xero.com/connect/token (refresh_token redacted in logs)",
+                event_type="auth.token.refresh.started",
+                module_name="xero_auth",
+                function_name="refresh",
+                request_url=TOKEN_URL,
+                request_method="POST",
+            )
+        except Exception:
+            pass
 
         data = {
             "grant_type": "refresh_token",
@@ -104,6 +173,20 @@ class XeroAuth:
             timeout=30,
         )
         if r.status_code != 200:
+            try:
+                import integration_db_log
+
+                integration_db_log.log_error(
+                    f"Token refresh HTTP error: status={r.status_code}",
+                    event_type="auth.token.refresh.failed",
+                    module_name="xero_auth",
+                    function_name="refresh",
+                    http_status_code=r.status_code,
+                    response_body_safe=integration_db_log.sanitize_response_body(r.text[:4000]),
+                    detail="Check XERO_CLIENT_ID/SECRET, refresh_token validity, and clock skew",
+                )
+            except Exception:
+                pass
             raise RuntimeError(f"Refresh failed ({r.status_code}): {r.text}")
 
         j = r.json()
@@ -118,9 +201,36 @@ class XeroAuth:
         )
         self.token_store.save(self.tokens)
         logger.info("Token refresh OK (expires_in=%s)", expires_in)
+        try:
+            import integration_db_log
+
+            integration_db_log.log_info(
+                f"Token refresh completed; new access token saved; expires_in={expires_in}s",
+                event_type="auth.token.refresh.completed",
+                module_name="xero_auth",
+                function_name="refresh",
+                status="OK",
+                duration_ms=None,
+                detail="Tokens persisted to disk; Authorization header not logged",
+            )
+        except Exception:
+            pass
         return self.tokens
 
     def get_connections(self) -> List[Dict[str, Any]]:
+        try:
+            import integration_db_log
+
+            integration_db_log.log_info(
+                "Fetching Xero tenant connections: GET api.xero.com/connections",
+                event_type="auth.connections.started",
+                module_name="xero_auth",
+                function_name="get_connections",
+                request_url=CONNECTIONS_URL,
+                request_method="GET",
+            )
+        except Exception:
+            pass
         token = self.ensure_valid_access_token()
         r = requests.get(
             CONNECTIONS_URL,
@@ -128,22 +238,101 @@ class XeroAuth:
             timeout=30,
         )
         if r.status_code != 200:
+            try:
+                import integration_db_log
+
+                integration_db_log.log_error(
+                    f"/connections failed with HTTP {r.status_code}",
+                    event_type="auth.connections.failed",
+                    module_name="xero_auth",
+                    function_name="get_connections",
+                    http_status_code=r.status_code,
+                    response_body_safe=integration_db_log.sanitize_response_body(r.text[:2000]),
+                )
+            except Exception:
+                pass
             raise RuntimeError(f"/connections failed ({r.status_code}): {r.text}")
-        return r.json()
+        data = r.json()
+        try:
+            import integration_db_log
+
+            integration_db_log.log_info(
+                f"Received {len(data)} connection(s) from Xero",
+                event_type="auth.connections.completed",
+                module_name="xero_auth",
+                function_name="get_connections",
+                record_count=len(data),
+                status="OK",
+                payload_summary=integration_db_log.payload_summary_from_obj(
+                    [
+                        {"tenantId": c.get("tenantId"), "tenantName": c.get("tenantName"), "tenantType": c.get("tenantType")}
+                        for c in (data[:5] if isinstance(data, list) else [])
+                    ]
+                ),
+            )
+        except Exception:
+            pass
+        return data
 
     def ensure_tenant(self) -> str:
         if self.tenant_id:
+            try:
+                import integration_db_log
+
+                integration_db_log.set_log_context(tenant_id=self.tenant_id)
+            except Exception:
+                pass
             return self.tenant_id
         conns = self.get_connections()
         if not conns:
+            try:
+                import integration_db_log
+
+                integration_db_log.log_error(
+                    "No Xero organisations returned — check app permissions and connections",
+                    event_type="auth.tenant.none",
+                    module_name="xero_auth",
+                    function_name="ensure_tenant",
+                )
+            except Exception:
+                pass
             raise RuntimeError("No tenants returned from /connections.")
         self.tenant_id = conns[0]["tenantId"]
+        tname = conns[0].get("tenantName") or conns[0].get("TenantName")
         logger.info("Tenant selected: %s", self.tenant_id)
+        try:
+            import integration_db_log
+
+            integration_db_log.set_log_context(tenant_id=self.tenant_id)
+            integration_db_log.log_info(
+                f"Active tenant resolved: tenant_id={self.tenant_id}; tenant_name={tname}",
+                event_type="auth.tenant.selected",
+                module_name="xero_auth",
+                function_name="ensure_tenant",
+                tenant_id=self.tenant_id,
+                xero_tenant_name=((tname or "")[:512]) or None,
+                detail="First connection in list is used; check Xero connections if wrong org",
+            )
+        except Exception:
+            pass
         return self.tenant_id
 
     def headers(self) -> Dict[str, str]:
         token = self.ensure_valid_access_token()
         tenant_id = self.ensure_tenant()
+        try:
+            import integration_db_log
+
+            integration_db_log.set_log_context(tenant_id=tenant_id)
+            integration_db_log.log_debug(
+                "Built Xero API headers: xero-tenant-id set; Bearer token not logged",
+                event_type="auth.headers.ready",
+                module_name="xero_auth",
+                function_name="headers",
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            pass
         return {
             "Authorization": f"Bearer {token}",
             "xero-tenant-id": tenant_id,

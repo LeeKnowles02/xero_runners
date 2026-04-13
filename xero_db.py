@@ -465,6 +465,24 @@ def save_endpoint_to_db(
     pk_col = columns[0]
     table_name = endpoint_name.replace(" ", "_")
     q = _quote_sql_identifier
+    _t0 = time.perf_counter()
+    try:
+        import integration_db_log
+
+        integration_db_log.log_info(
+            f"Azure SQL MERGE started: target xero.{table_name}, incoming rows={len(rows)}, "
+            f"pk_column={pk_col}. Next: per-row MERGE with UpdatedAt.",
+            event_type="db.merge.started",
+            module_name="xero_db",
+            function_name="save_endpoint_to_db",
+            entity_name=f"xero.{table_name}",
+            action="MERGE",
+            step_name="upsert_rows",
+            record_count=len(rows),
+            detail=f"endpoint_name={endpoint_name}; merge_columns={len(columns)}",
+        )
+    except Exception:
+        pass
 
     last_err = None
     for attempt in range(DB_WRITE_RETRIES):
@@ -501,6 +519,20 @@ def save_endpoint_to_db(
                     """
                     conn.execute(text(merge_sql), params)
             logger.info("Wrote %s rows to xero.%s", len(rows), table_name)
+            try:
+                import integration_db_log
+
+                integration_db_log.log_db_write(
+                    schema_table=f"xero.{table_name}",
+                    operation="MERGE upsert",
+                    rows_affected=len(rows),
+                    duration_ms=int((time.perf_counter() - _t0) * 1000),
+                    status="OK",
+                    message=f"DB upsert completed: xero.{table_name} ({len(rows)} row(s) processed)",
+                    step_name="save_endpoint_to_db",
+                )
+            except Exception:
+                pass
             return len(rows)
         except OperationalError as e:
             last_err = e
@@ -508,6 +540,22 @@ def save_endpoint_to_db(
                 logger.warning("DB write attempt %s/%s failed (will retry): %s", attempt + 1, DB_WRITE_RETRIES, e)
                 time.sleep(DB_WRITE_RETRY_DELAY)
             else:
+                try:
+                    import integration_db_log
+
+                    integration_db_log.log_db_write(
+                        schema_table=f"xero.{table_name}",
+                        operation="MERGE upsert",
+                        rows_affected=None,
+                        duration_ms=int((time.perf_counter() - _t0) * 1000),
+                        status="FAILED",
+                        message=f"OperationalError after {DB_WRITE_RETRIES} attempts on xero.{table_name}",
+                        error=e,
+                        step_name="save_endpoint_to_db",
+                        detail="Check Azure SQL connectivity, firewall, and credentials",
+                    )
+                except Exception:
+                    pass
                 raise
         except Exception as e:
             last_err = e
@@ -515,4 +563,19 @@ def save_endpoint_to_db(
                 logger.warning("DB connection error (will retry): %s", e)
                 time.sleep(DB_WRITE_RETRY_DELAY)
             else:
+                try:
+                    import integration_db_log
+
+                    integration_db_log.log_db_write(
+                        schema_table=f"xero.{table_name}",
+                        operation="MERGE upsert",
+                        rows_affected=None,
+                        duration_ms=int((time.perf_counter() - _t0) * 1000),
+                        status="FAILED",
+                        message=f"DB upsert failed on xero.{table_name}: {type(e).__name__}",
+                        error=e,
+                        step_name="save_endpoint_to_db",
+                    )
+                except Exception:
+                    pass
                 raise

@@ -41,6 +41,26 @@ def main():
     if not cid or not csec:
         raise RuntimeError("Missing XERO_CLIENT_ID / XERO_CLIENT_SECRET in .env")
 
+    try:
+        import integration_db_log
+        import time as _time
+
+        _batch_t0 = _time.perf_counter()
+        integration_db_log.set_log_context(correlation_id=integration_db_log.new_correlation_id())
+        integration_db_log.log_info(
+            "CLI run_jobs: configuration loaded from .env; starting scheduled/manual batch",
+            event_type="run_jobs.batch.started",
+            module_name="run_jobs",
+            function_name="main",
+            status="STARTED",
+            detail=(
+                "Credentials present (not logged). Each endpoint will get its own run_id inside "
+                "run_endpoint_selected; use correlation_id to tie this process to integration_log rows."
+            ),
+        )
+    except Exception:
+        _batch_t0 = None  # type: ignore
+
     token_store = FileTokenStore(TOKEN_PATH)
     state = JsonStateStore(STATE_PATH)
 
@@ -82,5 +102,39 @@ def main():
         logger.info("%s: %s rows=%s mode=%s err=%s", ep, status, rows, mode, err)
         print(f"{ep}: {status} rows={rows} mode={mode} err={err}")
 
+    try:
+        import integration_db_log
+        import time as _time
+
+        if _batch_t0 is not None:
+            dur = int((_time.perf_counter() - _batch_t0) * 1000)
+            integration_db_log.log_info(
+                f"CLI run_jobs batch finished: {len(endpoints)} endpoint(s) processed",
+                event_type="run_jobs.batch.completed",
+                module_name="run_jobs",
+                function_name="main",
+                status="OK",
+                duration_ms=dur,
+                detail=f"endpoints={endpoints!r}; incremental={incremental}",
+            )
+        integration_db_log.set_log_context(clear=True)
+    except Exception:
+        pass
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        try:
+            import integration_db_log
+
+            integration_db_log.log_exception(
+                "run_jobs CLI terminated with an exception",
+                e,
+                step_name="main",
+                detail="Check .env, token file, network, and prior integration_log rows for this host.",
+            )
+            integration_db_log.set_log_context(clear=True)
+        except Exception:
+            pass
+        raise
