@@ -26,7 +26,7 @@ CREATE TABLE xero.integration_log (
     [entity_name] NVARCHAR(255) NULL,
     [action] NVARCHAR(255) NULL,
     [step_name] NVARCHAR(255) NULL,
-    [status] NVARCHAR(50) NULL,
+    [status] NVARCHAR(50) NOT NULL CONSTRAINT DF_integration_log_status DEFAULT N'SUCCESS',
     [message] NVARCHAR(MAX) NULL,
     [detail] NVARCHAR(MAX) NULL,
     [payload_summary] NVARCHAR(MAX) NULL,
@@ -45,7 +45,8 @@ CREATE TABLE xero.integration_log (
     [machine_name] NVARCHAR(255) NULL,
     [environment] NVARCHAR(64) NULL,
     [created_by] NVARCHAR(255) NULL,
-    CONSTRAINT PK_xero_integration_log PRIMARY KEY CLUSTERED ([id])
+    CONSTRAINT PK_xero_integration_log PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT CK_integration_log_status CHECK ([status] IN (N'SUCCESS', N'FAILED', N'IN_PROGRESS', N'WARNING'))
 );
 GO
 

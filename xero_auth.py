@@ -209,7 +209,7 @@ class XeroAuth:
                 event_type="auth.token.refresh.completed",
                 module_name="xero_auth",
                 function_name="refresh",
-                status="OK",
+                status=integration_db_log.STATUS_SUCCESS,
                 duration_ms=None,
                 detail="Tokens persisted to disk; Authorization header not logged",
             )
@@ -262,7 +262,7 @@ class XeroAuth:
                 module_name="xero_auth",
                 function_name="get_connections",
                 record_count=len(data),
-                status="OK",
+                status=integration_db_log.STATUS_SUCCESS,
                 payload_summary=integration_db_log.payload_summary_from_obj(
                     [
                         {"tenantId": c.get("tenantId"), "tenantName": c.get("tenantName"), "tenantType": c.get("tenantType")}

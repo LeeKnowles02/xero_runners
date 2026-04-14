@@ -635,7 +635,8 @@ def _fetch_generic_endpoint(
             endpoint=endpoint_name,
             entity_name=root,
             record_count=len(all_items),
-            status="OK",
+            status=integration_db_log.STATUS_SUCCESS,
+            step_name="_fetch_generic_endpoint",
             detail=f"path={path}; incremental_since_iso={incremental_since_iso}",
             payload_summary=integration_db_log.payload_summary_from_obj(
                 {"url": url, "paged": paged, "if_modified_since": bool(incremental_since_iso)}
@@ -709,21 +710,33 @@ def _integration_log_run_done(
     err: Optional[str],
     t0: float,
 ) -> None:
-    """DB audit: endpoint run completed successfully (or zero rows)."""
+    """DB audit: endpoint run completed; closes xero.sync_run and writes integration_log event."""
     try:
         import integration_db_log
 
+        ok = status == "OK"
+        evt_status = integration_db_log.STATUS_SUCCESS if ok else integration_db_log.STATUS_FAILED
         integration_db_log.log_info(
-            f"Endpoint run finished: {endpoint_name} status={status} rows_written={rows_written}",
+            f"Endpoint run finished: {endpoint_name} worker_status={status} rows_written={rows_written}",
             event_type="endpoint.run.completed",
             module_name="xero_jobs",
             function_name="run_endpoint_selected",
             endpoint=endpoint_name,
-            status=status,
+            status=evt_status,
+            step_name="run_endpoint_selected",
             record_count=rows_written,
             duration_ms=int((time.perf_counter() - t0) * 1000),
             detail=f"mode={mode}" + (f"; error={err}" if err else ""),
         )
+        rid = integration_db_log.get_log_context().get("run_id")
+        if rid:
+            integration_db_log.complete_sync_run(
+                rid,
+                final_status=integration_db_log.STATUS_SUCCESS if ok else integration_db_log.STATUS_FAILED,
+                total_records=rows_written,
+                total_errors=0 if ok else 1,
+                message=(err or None) if not ok else None,
+            )
     except Exception:
         pass
 
@@ -1147,8 +1160,15 @@ def run_endpoint_selected(
     try:
         import integration_db_log
 
+        _run_id = integration_db_log.new_run_id()
+        integration_db_log.start_sync_run(
+            _run_id,
+            correlation_id=integration_db_log.get_log_context().get("correlation_id"),
+            tenant_id=headers.get("xero-tenant-id"),
+            endpoint_name=endpoint_name,
+        )
         integration_db_log.set_log_context(
-            run_id=integration_db_log.new_run_id(),
+            run_id=_run_id,
             tenant_id=headers.get("xero-tenant-id"),
         )
         integration_db_log.log_info(
@@ -1157,6 +1177,8 @@ def run_endpoint_selected(
             module_name="xero_jobs",
             function_name="run_endpoint_selected",
             endpoint=endpoint_name,
+            status=integration_db_log.STATUS_IN_PROGRESS,
+            step_name="run_endpoint_selected",
             detail=(
                 f"excel_path={excel_path}; mode={mode}; incremental_since_iso={incremental_since_iso}; "
                 f"max_journals={max_journals}; start_after={start_after}"
@@ -1549,6 +1571,8 @@ def run_endpoint_selected(
                         module_name="xero_jobs",
                         function_name="run_endpoint_selected",
                         endpoint=endpoint_name,
+                        status=integration_db_log.STATUS_WARNING,
+                        step_name="run_endpoint_selected",
                         record_count=0,
                         detail=f"incremental_since_iso={incremental_since_iso}",
                     )
@@ -1594,6 +1618,15 @@ def run_endpoint_selected(
                 duration_ms=int((time.perf_counter() - _run_t0) * 1000),
                 detail=f"excel_path={excel_path}; incremental_since_iso={incremental_since_iso}",
             )
+            rid = integration_db_log.get_log_context().get("run_id")
+            if rid:
+                integration_db_log.complete_sync_run(
+                    rid,
+                    final_status=integration_db_log.STATUS_FAILED,
+                    total_records=0,
+                    total_errors=1,
+                    message=str(e)[:4000],
+                )
         except Exception:
             pass
         mode_label = mode if mode != "full" else ("FULL" if not incremental_since_iso else f"INCREMENTAL since {incremental_since_iso}")

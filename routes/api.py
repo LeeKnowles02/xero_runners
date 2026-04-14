@@ -204,7 +204,7 @@ def register_api(app, xero, state, logger):
                 payload_summary=integration_db_log.payload_summary_from_obj(
                     {"endpoint": endpoint, "incremental": incremental, "has_column_override": bool(columns)}
                 ),
-                status="STARTED",
+                status=integration_db_log.STATUS_IN_PROGRESS,
                 message=(
                     f"Dashboard requested a sync for endpoint={endpoint!r}; incremental={incremental}. "
                     "Next: resolve preset columns, read incremental watermark, obtain Xero headers (tenant), "
@@ -255,7 +255,7 @@ def register_api(app, xero, state, logger):
                     payload_summary=integration_db_log.payload_summary_from_obj(
                         {"endpoint": endpoint, "status": status, "mode": mode, "err": err}
                     ),
-                    status="OK" if status == "OK" else "FAILED",
+                    status=integration_db_log.STATUS_SUCCESS if status == "OK" else integration_db_log.STATUS_FAILED,
                     message=(
                         f"UI sync finished: endpoint={endpoint!r}; http/sync status={status}; mode={mode}; "
                         f"rows_written={rows}; worker_error={err!r}. "

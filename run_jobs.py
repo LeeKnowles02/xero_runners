@@ -52,7 +52,7 @@ def main():
             event_type="run_jobs.batch.started",
             module_name="run_jobs",
             function_name="main",
-            status="STARTED",
+            status=integration_db_log.STATUS_IN_PROGRESS,
             detail=(
                 "Credentials present (not logged). Each endpoint will get its own run_id inside "
                 "run_endpoint_selected; use correlation_id to tie this process to integration_log rows."
@@ -113,7 +113,7 @@ def main():
                 event_type="run_jobs.batch.completed",
                 module_name="run_jobs",
                 function_name="main",
-                status="OK",
+                status=integration_db_log.STATUS_SUCCESS,
                 duration_ms=dur,
                 detail=f"endpoints={endpoints!r}; incremental={incremental}",
             )

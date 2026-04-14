@@ -35,9 +35,11 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                     "User cleared stored tokens via /api/auth/reset; re-authorization required",
                     module_name="routes.auth_routes",
                     function_name="api_auth_reset",
-                    status="OK",
-                    detail=f"Token file removed if present: {TOKEN_PATH}; backup under {backup_dir}",
-                    message="Next: user should open Authorize flow from the dashboard.",
+                    status=integration_db_log.STATUS_SUCCESS,
+                    detail=(
+                        f"Token file removed if present: {TOKEN_PATH}; backup under {backup_dir}. "
+                        "Next: user should open Authorize flow from the dashboard."
+                    ),
                 )
             except Exception:
                 pass
@@ -88,12 +90,12 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                 "PKCE + state prepared; user will be redirected to Xero authorize URL",
                 module_name="routes.auth_routes",
                 function_name="api_auth_start",
-                status="OK",
+                status=integration_db_log.STATUS_SUCCESS,
                 detail=(
                     f"redirect_uri={REDIRECT_URI}; scopes_length={len(scopes)}; "
-                    "auth_url returned to browser (tokens not in response body)."
+                    "auth_url returned to browser (tokens not in response body). "
+                    "Next: browser opens Xero login; callback will exchange code for tokens."
                 ),
-                message="Next: browser opens Xero login; callback will exchange code for tokens.",
             )
         except Exception:
             pass
@@ -113,7 +115,7 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                     f"OAuth redirect returned error query param: {err}",
                     module_name="routes.auth_routes",
                     function_name="callback",
-                    status="FAILED",
+                    status=integration_db_log.STATUS_FAILED,
                     detail="User may have denied consent or Xero returned an error. Retry auth from app.",
                 )
             except Exception:
@@ -133,7 +135,7 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                     "Callback reached without authorization code",
                     module_name="routes.auth_routes",
                     function_name="callback",
-                    status="FAILED",
+                    status=integration_db_log.STATUS_FAILED,
                 )
             except Exception:
                 pass
@@ -150,7 +152,7 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                     "CSRF state does not match session; possible stale or parallel auth attempt",
                     module_name="routes.auth_routes",
                     function_name="callback",
-                    status="FAILED",
+                    status=integration_db_log.STATUS_FAILED,
                     detail="Restart authorization from the app to obtain a fresh state/PKCE pair.",
                 )
             except Exception:
@@ -168,7 +170,7 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                     "PKCE verifier missing from session",
                     module_name="routes.auth_routes",
                     function_name="callback",
-                    status="FAILED",
+                    status=integration_db_log.STATUS_FAILED,
                 )
             except Exception:
                 pass
@@ -190,7 +192,7 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                 "POST to token endpoint with authorization_code (secrets not logged)",
                 module_name="routes.auth_routes",
                 function_name="callback",
-                status="STARTED",
+                status=integration_db_log.STATUS_IN_PROGRESS,
                 request_url=TOKEN_URL,
                 request_method="POST",
                 detail="Using client basic auth and PKCE verifier; response will be parsed for expiry and scope only.",
@@ -210,7 +212,7 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                     f"Token endpoint returned HTTP {r.status_code}",
                     module_name="routes.auth_routes",
                     function_name="callback",
-                    status="FAILED",
+                    status=integration_db_log.STATUS_FAILED,
                     http_status_code=r.status_code,
                     response_summary=integration_db_log.sanitize_response_body(r.text, 1500),
                     detail="Verify client id/secret, redirect_uri, and that the auth code was not reused or expired.",
@@ -246,7 +248,7 @@ def register_auth_routes(app, xero, token_store, client_id, client_secret, logge
                 "Tokens written to disk; in-memory auth refreshed (no token values logged)",
                 module_name="routes.auth_routes",
                 function_name="callback",
-                status="OK",
+                status=integration_db_log.STATUS_SUCCESS,
                 detail=(
                     f"expires_in_s={expires_in}; token_path={TOKEN_PATH}; "
                     "Next: XeroAuth will call /connections to resolve tenant on first API use."

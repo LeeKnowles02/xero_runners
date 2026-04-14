@@ -48,7 +48,7 @@ try:
         event_type="app.lifecycle.startup",
         module_name="app",
         function_name="<module>",
-        status="OK",
+        status=integration_db_log.STATUS_SUCCESS,
         detail=(
             f"PORT={PORT}; REDIRECT_URI={REDIRECT_URI}; "
             f"DATA_DIR={DATA_DIR}; TOKEN_PATH={TOKEN_PATH}; EXCEL_PATH={EXCEL_PATH}; "
