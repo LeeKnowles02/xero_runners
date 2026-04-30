@@ -531,3 +531,164 @@ a.btn-link:hover {
 [data-theme="dark"] a.btn-link:hover {
     background: #252830;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Global loading overlay (see static/js/loading.js) */
+/* -------------------------------------------------------------------------- */
+
+.loader.hidden {
+    display: none !important;
+    pointer-events: none;
+}
+
+.loader {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 18, 28, 0.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    padding: 24px;
+}
+
+.loader-content {
+    width: min(420px, 100%);
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    padding: 28px 24px 20px;
+    text-align: center;
+}
+
+.loader-text {
+    font-weight: 700;
+    font-size: 1.05rem;
+    margin: 16px 0 12px;
+    line-height: 1.35;
+}
+
+.loader .spinner {
+    width: 44px;
+    height: 44px;
+    margin: 0 auto;
+    border: 3px solid var(--border);
+    border-top-color: var(--brand);
+    border-radius: 50%;
+    animation: loader-spin 0.85s linear infinite;
+}
+
+@keyframes loader-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.loader-progress {
+    height: 6px;
+    width: 100%;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+
+.loader-progress-indeterminate {
+    height: 100%;
+    width: 40%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--brand), var(--info));
+    animation: loader-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes loader-indeterminate {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(350%);
+    }
+}
+
+.loader-actions {
+    margin-top: 20px;
+    display: flex;
+    justify-content: center;
+}
+
+.btn-inline-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    margin-right: 8px;
+    vertical-align: -2px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: loader-spin 0.75s linear infinite;
+}
+
+.btn.btn-primary .btn-inline-spinner,
+.btn.btn-secondary .btn-inline-spinner {
+    border-color: rgba(0, 0, 0, 0.15);
+    border-top-color: var(--text);
+}
+
+[data-theme="dark"] .btn.btn-primary .btn-inline-spinner,
+[data-theme="dark"] .btn.btn-secondary .btn-inline-spinner {
+    border-color: rgba(255, 255, 255, 0.2);
+    border-top-color: #fff;
+}
+
+button.is-loading .btn-loader-label {
+    font-weight: 700;
+}
+
+/* Flash messages (Flask) */
+.flash {
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    font-size: 14px;
+}
+
+.flash-success {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.35);
+    color: var(--text);
+}
+
+.flash-error {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.35);
+    color: var(--text);
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.data-table th,
+.data-table td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.data-table th {
+    font-weight: 700;
+    background: var(--bg);
+}
+
+.cell-truncate {
+    max-width: 420px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

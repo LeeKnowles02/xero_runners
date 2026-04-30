@@ -2,6 +2,7 @@
 Xero Runner – entry point.
 Run with: python app.py
 """
+import os
 import webbrowser
 
 from flask import Flask
@@ -60,6 +61,7 @@ except Exception:
     pass
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dev-xero-runner-flask-secret-change-me"
 register_routes(app, xero, state, token_store, client_id, client_secret, logger)
 
 if __name__ == "__main__":
