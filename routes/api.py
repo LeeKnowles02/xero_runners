@@ -25,6 +25,23 @@ from xero_db import test_database_connection_and_seed, clear_connection_test_dat
 from xero_test import run_sample_db_test, run_incremental_validation_test, clear_test_rows
 
 
+def _attach_download_token_cookie(response):
+    """
+    Loader handshake: browser polls document.cookie for unleashed_download_token
+    after file downloads (form POST or fetch with credentials).
+    """
+    token = request.args.get("download_token") or request.form.get("download_token")
+    if token:
+        response.set_cookie(
+            "unleashed_download_token",
+            token,
+            max_age=120,
+            samesite="Lax",
+            path="/",
+        )
+    return response
+
+
 def _pipeline_xero_auth_error(e: Exception, logger) -> tuple:
     msg = str(e)
     if "No tokens found" in msg or "interactive auth" in msg.lower():
@@ -325,19 +342,23 @@ def register_api(app, xero, state, logger):
             if buf is None:
                 return jsonify({"ok": False, "error": f"No sheet for endpoint '{endpoint}' yet. Run that endpoint first."}), 404
             safe_name = endpoint.replace("/", "-").replace("\\", "-")[:50]
-            return send_file(
-                buf,
-                as_attachment=True,
-                download_name=f"xero_{safe_name}.xlsx",
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            return _attach_download_token_cookie(
+                send_file(
+                    buf,
+                    as_attachment=True,
+                    download_name=f"xero_{safe_name}.xlsx",
+                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
             )
         if not os.path.isfile(EXCEL_PATH):
             return jsonify({"ok": False, "error": "Excel file not found. Run an endpoint first."}), 404
-        return send_file(
-            EXCEL_PATH,
-            as_attachment=True,
-            download_name="xero_endpoints.xlsx",
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        return _attach_download_token_cookie(
+            send_file(
+                EXCEL_PATH,
+                as_attachment=True,
+                download_name="xero_endpoints.xlsx",
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
         )
 
     @app.post("/api/open_excel")

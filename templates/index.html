@@ -46,7 +46,16 @@
               <button type="button" class="btn btn-secondary btn-sm" onclick="selectAllCols()">Select all</button>
               <button type="button" class="btn btn-secondary btn-sm" onclick="selectNoCols()">Select none</button>
               <button type="button" class="btn btn-secondary btn-sm" onclick="savePreset()">Save preset</button>
-              <button type="button" class="btn btn-primary btn-md" id="runBtn" onclick="runSelected()">Run</button>
+              <button
+                type="button"
+                class="btn btn-primary btn-md js-loader-trigger js-disable-while-loading"
+                id="runBtn"
+                data-loader-message="Processing endpoint…"
+                data-loader-button-text="Running…"
+                onclick="runSelected()"
+              >
+                Run
+              </button>
             </div>
             <div class="small" id="watermarkLine" style="margin-top: 8px;"></div>
             <div class="cols" id="columnsGrid" style="margin-top: 12px;"></div>
@@ -129,7 +138,7 @@ async function loadEndpoints(){
   list.innerHTML = '';
   allEndpoints.forEach(name => {
     const btn = document.createElement('button');
-    btn.className = 'btn btn-secondary btn-sm endpointBtn';
+    btn.className = 'btn btn-secondary btn-sm endpointBtn js-disable-while-loading';
     btn.textContent = name;
     btn.onclick = () => setActiveEndpoint(name);
     list.appendChild(btn);
@@ -214,11 +223,17 @@ async function savePreset(){
   document.getElementById('out').textContent = JSON.stringify(j, null, 2);
 }
 
-async function triggerExcelDownload(endpoint){
+async function triggerExcelDownload(endpoint, signal){
+  const RL = window.RunnerLoading;
   try {
-    const q = new URLSearchParams({ t: String(Date.now()) });
+    const token = RL ? RL.generateDownloadToken() : ('dl_' + Date.now());
+    const q = new URLSearchParams({ t: String(Date.now()), download_token: token });
     if (endpoint) q.set('endpoint', endpoint);
-    const r = await fetch('/api/download_excel?' + q.toString());
+    if (RL) RL.watchDownloadToken(token, { signal: signal, suppressHide: true });
+    const r = await fetch('/api/download_excel?' + q.toString(), {
+      signal: signal,
+      credentials: 'same-origin',
+    });
     if (!r.ok) return;
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
@@ -231,38 +246,45 @@ async function triggerExcelDownload(endpoint){
     document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 200);
   } catch (e) {
+    if (e && e.name === 'AbortError') throw e;
     console.error('Download failed', e);
   }
 }
 
 async function runSelected(){
+  if (window.__xeroRunInFlight) return;
+  const RL = window.RunnerLoading;
   const outEl = document.getElementById('out');
   const runBtn = document.getElementById('runBtn');
   const outputCard = outEl && outEl.closest ? outEl.closest('.card') : null;
-
-  function setRunning(running) {
-    if (runBtn) {
-      runBtn.textContent = running ? 'Running…' : 'Run';
-      runBtn.disabled = running;
-    }
-  }
 
   if (!activeEndpoint) {
     outEl.textContent = 'Please select an endpoint from the list on the left first (e.g. Organisation, JournalLines).';
     if (outputCard) outputCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     return;
   }
-  const cols = selectedColumns();
-  const incremental = document.getElementById('incrementalToggle').checked;
 
-  setRunning(true);
+  window.__xeroRunInFlight = true;
+  const ac = new AbortController();
+  if (RL) {
+    RL.setAbortController(ac);
+    RL.showLoader('Processing ' + activeEndpoint + '…', runBtn);
+  } else if (runBtn) {
+    runBtn.disabled = true;
+    runBtn.textContent = 'Running…';
+  }
+
   outEl.textContent = 'Running ' + activeEndpoint + '…';
   if (outputCard) outputCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  const cols = selectedColumns();
+  const incremental = document.getElementById('incrementalToggle').checked;
 
   try {
     const r = await fetch('/api/run', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
+      signal: ac.signal,
       body: JSON.stringify({endpoint: activeEndpoint, columns: cols, incremental})
     });
     const text = await r.text();
@@ -271,17 +293,27 @@ async function runSelected(){
       j = JSON.parse(text);
     } catch (_) {
       outEl.textContent = 'Server error (' + r.status + '):\n' + text;
-      setRunning(false);
       return;
     }
     outEl.textContent = JSON.stringify(j, null, 2);
     refreshStatus();
-    if (j && j.ok) await triggerExcelDownload(activeEndpoint);
+    if (j && j.ok) await triggerExcelDownload(activeEndpoint, ac.signal);
   } catch (e) {
-    outEl.textContent = 'Error: ' + (e.message || String(e));
-    console.error('Run failed', e);
+    if (e && e.name === 'AbortError') {
+      outEl.textContent = 'Cancelled.';
+    } else {
+      outEl.textContent = 'Error: ' + (e.message || String(e));
+      console.error('Run failed', e);
+    }
   } finally {
-    setRunning(false);
+    window.__xeroRunInFlight = false;
+    if (RL) {
+      RL.clearAbortController();
+      RL.hideLoader();
+    } else if (runBtn) {
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run';
+    }
   }
 }
 
@@ -330,6 +362,10 @@ async function generateSchedulerFiles(){
   const j = await r.json();
   document.getElementById('scheduleOut').textContent = JSON.stringify(j, null, 2);
 }
+
+document.addEventListener('runnerloading:end', function () {
+  window.__xeroRunInFlight = false;
+});
 
 refreshStatus();
 loadEndpoints().then(loadSchedule);

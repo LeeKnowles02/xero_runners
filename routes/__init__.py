@@ -4,6 +4,7 @@ from flask import g, request
 from .pages import register_pages
 from .api import register_api
 from .auth_routes import register_auth_routes
+from .exchange_rates_routes import register_exchange_rates_routes
 
 
 def register_routes(app, xero, state, token_store, client_id, client_secret, logger):
@@ -39,5 +40,6 @@ def register_routes(app, xero, state, token_store, client_id, client_secret, log
                 pass
 
     register_pages(app)
+    register_exchange_rates_routes(app)
     register_api(app, xero, state, logger)
     register_auth_routes(app, xero, token_store, client_id, client_secret, logger)

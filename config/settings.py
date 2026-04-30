@@ -30,3 +30,18 @@ def ensure_creds():
 def get_scopes() -> str:
     s = (os.getenv("XERO_SCOPES") or "").strip()
     return s if s else DEFAULT_SCOPES
+
+
+def get_frankfurter_settings() -> dict:
+    """Frankfurter API + provider label (load .env from project root)."""
+    load_dotenv(os.path.join(BASE_DIR, ".env"))
+    return {
+        # Default matches Frankfurter's working "latest" endpoint on api.frankfurter.dev.
+        # Override in .env (e.g. https://api.frankfurter.dev/v2/rates/2026-04-24) if you use a dated path.
+        "base_url": (
+            os.getenv("FRANKFURTER_BASE_URL") or "https://api.frankfurter.dev/v1/latest"
+        ).strip(),
+        "base": (os.getenv("FRANKFURTER_BASE") or "USD").strip().upper()[:3],
+        "quotes": (os.getenv("FRANKFURTER_QUOTES") or "ZAR,GBP,EUR").strip(),
+        "provider": (os.getenv("FRANKFURTER_PROVIDER") or "ECB").strip() or None,
+    }

@@ -13,6 +13,7 @@ from .settings import (
     TOKEN_URL,
     ensure_creds,
     get_scopes,
+    get_frankfurter_settings,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "TOKEN_URL",
     "ensure_creds",
     "get_scopes",
+    "get_frankfurter_settings",
 ]
