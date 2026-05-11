@@ -29,6 +29,9 @@ XERO_THROTTLE_SECONDS = float(os.getenv("XERO_THROTTLE_SECONDS", "1.2"))
 # JournalLines checkpoint flush frequency (rows appended between saves)
 JOURNALLINES_FLUSH_EVERY = int(os.getenv("JOURNALLINES_FLUSH_EVERY", "500"))
 
+# JournalLines bootstrap preview count (visible proof-of-life at run start)
+JOURNALLINES_BOOTSTRAP_JOURNALS = int(os.getenv("JOURNALLINES_BOOTSTRAP_JOURNALS", "10"))
+
 # JournalLines resume checkpoint file name
 JOURNALLINES_CHECKPOINT_NAME = "JournalLines.checkpoint.json"
 
@@ -947,6 +950,17 @@ def fetch_journal_lines_sample(
             full_journal = detail_json["Journal"]
         else:
             full_journal = item
+
+        # Keep sample path aligned with full JournalLines logic when detail omits header fields.
+        if full_journal.get("SourceType") in (None, "") and item.get("SourceType") not in (None, ""):
+            full_journal["SourceType"] = item.get("SourceType")
+        if full_journal.get("SourceID") in (None, "") and item.get("SourceID") not in (None, ""):
+            full_journal["SourceID"] = item.get("SourceID")
+        if full_journal.get("JournalNumber") in (None, "") and item.get("JournalNumber") not in (None, ""):
+            full_journal["JournalNumber"] = item.get("JournalNumber")
+        if full_journal.get("JournalDate") in (None, "") and item.get("JournalDate") not in (None, ""):
+            full_journal["JournalDate"] = item.get("JournalDate")
+
         full_journals.append(full_journal)
         line_rows.extend(extract_journal_line_rows(full_journal))
         try:
@@ -1049,14 +1063,32 @@ def run_endpoint_selected(
         if endpoint_name == "JournalLines" and mode in {"sample_test", "incremental_control", "incremental_batch"}:
             journals, line_rows, checkpoint = fetch_journal_lines_sample(
                 headers=headers,
-                max_journals=int(max_journals or 10),
+                max_journals=int(max_journals or JOURNALLINES_BOOTSTRAP_JOURNALS or 10),
                 start_after=start_after,
             )
             mode_label = f"{mode} start_after={start_after} next={checkpoint}"
-            append_run_log(wb, endpoint_name, mode_label, len(line_rows), "OK", None)
+
+            sample_sheet = "JournalLines"
+            ws_sample = _ensure_sheet(wb, sample_sheet, selected_columns)
+            sample_existing = _load_existing_row_keys(ws_sample, selected_columns)
+            appended = 0
+            for rd in line_rows:
+                values = [get_by_path(rd, col) for col in selected_columns]
+                k = _row_key_from_values(values)
+                if k in sample_existing:
+                    continue
+                sample_existing.add(k)
+                ws_sample.append(values)
+                appended += 1
+
+            autosize_columns(ws_sample)
+            append_run_log(wb, endpoint_name, mode_label, appended, "OK", None)
             save_workbook_atomic(wb, excel_path)
-            logger.info("JournalLines test mode=%s journals=%s lines=%s", mode, len(journals), len(line_rows))
-            return len(line_rows), "OK", mode_label, None
+            logger.info(
+                "JournalLines test mode=%s journals=%s lines=%s appended=%s",
+                mode, len(journals), len(line_rows), appended
+            )
+            return appended, "OK", mode_label, None
 
         # -----------------------
         # Journals: bulletproof run
@@ -1224,9 +1256,12 @@ def run_endpoint_selected(
             rows_written = already_written
             mode = "FILL_MISSING_OR_CHANGED_FROM_JOURNALS"
             proc_appended = 0
+            chunk_no = 0
+            run_started_at = (ck.get("started_at") if ck else utc_now_iso())
+            bootstrap_journals = max(0, int(max_journals or JOURNALLINES_BOOTSTRAP_JOURNALS or 0))
 
-            def _append_rows_local(row_dicts: List[Dict[str, Any]]) -> int:
-                count = 0
+            def _append_rows_local(row_dicts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                appended_rows: List[Dict[str, Any]] = []
                 for rd in row_dicts:
                     values = [get_by_path(rd, col) for col in selected_columns]
                     k = _row_key_from_values(values)
@@ -1234,8 +1269,57 @@ def run_endpoint_selected(
                         continue
                     existing_keys.add(k)
                     ws_lines.append(values)
-                    count += 1
-                return count
+                    appended_rows.append(rd)
+                return appended_rows
+
+            def _write_db_chunk(row_dicts: List[Dict[str, Any]], chunk_label: str) -> int:
+                if not row_dicts:
+                    return 0
+                try:
+                    from xero_db import save_endpoint_to_db
+                    db_rows = [{c: get_by_path(item, c) for c in selected_columns} for item in row_dicts]
+                    db_written = save_endpoint_to_db("JournalLines", db_rows, selected_columns)
+                    if db_written:
+                        logger.info(
+                            "JournalLines %s: wrote %s rows to DB (xero.JournalLines)",
+                            chunk_label,
+                            db_written,
+                        )
+                    return int(db_written or 0)
+                except Exception as db_err:
+                    logger.warning("DB write skipped for JournalLines %s: %s", chunk_label, db_err)
+                    return 0
+
+            def _flush_chunk(row_dicts: List[Dict[str, Any]], next_index: int, chunk_label: str) -> int:
+                nonlocal rows_written
+                appended_rows = _append_rows_local(row_dicts)
+                appended_count = len(appended_rows)
+                rows_written += appended_count
+                autosize_columns(ws_lines)
+                autosize_columns(ws_proc)
+                save_workbook_atomic(wb, excel_path)
+                db_written = _write_db_chunk(appended_rows, chunk_label)
+                append_run_log(wb, endpoint_name, chunk_label, appended_count, "OK", None)
+                save_workbook_atomic(wb, excel_path)
+                _save_checkpoint(checkpoint_path, {
+                    "endpoint": "JournalLines",
+                    "excel_path": excel_path,
+                    "started_at": run_started_at,
+                    "pending_ids": pending_ids,
+                    "journal_index": next_index,
+                    "rows_written": rows_written,
+                    "mode": mode,
+                })
+                logger.info(
+                    "JournalLines %s complete: appended=%s db_written=%s next_index=%s/%s total_rows=%s",
+                    chunk_label,
+                    appended_count,
+                    db_written,
+                    next_index,
+                    len(pending_ids),
+                    rows_written,
+                )
+                return appended_count
 
             def _get_json_detail(journal_id: str) -> Optional[Dict[str, Any]]:
                 detail_url = f"{XERO_API_BASE}/Journals/{journal_id}"
@@ -1306,7 +1390,38 @@ def run_endpoint_selected(
                     })
                 return out
 
-            for idx in range(start_index, len(pending_ids)):
+            loop_start = start_index
+
+            if start_index == 0 and bootstrap_journals > 0:
+                preview_end = min(len(pending_ids), bootstrap_journals)
+                preview_buffer: List[Dict[str, Any]] = []
+                for idx in range(start_index, preview_end):
+                    jid = pending_ids[idx]
+                    meta = header_map.get(jid, {})
+                    jnum = meta.get("JournalNumber")
+                    cdu = meta.get("CreatedDateUTC")
+                    hhash = meta.get("HeaderHash") or ""
+
+                    jobj = _get_json_detail(jid)
+                    if not jobj:
+                        ws_proc.append([jid, jnum, cdu, hhash, utc_now_iso(), 0])
+                        proc_appended += 1
+                    else:
+                        rows = _detail_to_rows(jobj)
+                        preview_buffer.extend(rows)
+                        ws_proc.append([jid, jnum, cdu, hhash, utc_now_iso(), len(rows)])
+                        proc_appended += 1
+
+                if preview_buffer:
+                    _flush_chunk(
+                        preview_buffer,
+                        preview_end,
+                        f"{mode} PREVIEW first {preview_end - start_index} journals",
+                    )
+                loop_start = preview_end
+
+            buffer = []
+            for idx in range(loop_start, len(pending_ids)):
                 jid = pending_ids[idx]
                 meta = header_map.get(jid, {})
                 jnum = meta.get("JournalNumber")
@@ -1318,30 +1433,19 @@ def run_endpoint_selected(
                     ws_proc.append([jid, jnum, cdu, hhash, utc_now_iso(), 0])
                     proc_appended += 1
                 else:
-                    rows = extract_journal_line_rows(jobj)
+                    rows = _detail_to_rows(jobj)
                     buffer.extend(rows)
                     ws_proc.append([jid, jnum, cdu, hhash, utc_now_iso(), len(rows)])
                     proc_appended += 1
 
                 if len(buffer) >= JOURNALLINES_FLUSH_EVERY:
-                    rows_written += _append_rows_local(buffer)
+                    chunk_no += 1
+                    _flush_chunk(buffer, idx + 1, f"{mode} CHUNK {chunk_no}")
                     buffer = []
-                    autosize_columns(ws_lines)
-                    autosize_columns(ws_proc)
-                    save_workbook_atomic(wb, excel_path)
-                    _save_checkpoint(checkpoint_path, {
-                        "endpoint": "JournalLines",
-                        "excel_path": excel_path,
-                        "started_at": (ck.get("started_at") if ck else utc_now_iso()),
-                        "pending_ids": pending_ids,
-                        "journal_index": idx + 1,
-                        "rows_written": rows_written,
-                        "mode": mode,
-                    })
 
             if buffer:
-                rows_written += _append_rows_local(buffer)
-                autosize_columns(ws_lines)
+                chunk_no += 1
+                _flush_chunk(buffer, len(pending_ids), f"{mode} FINAL CHUNK {chunk_no}")
 
             autosize_columns(ws_proc)
             save_workbook_atomic(wb, excel_path)
@@ -1349,26 +1453,6 @@ def run_endpoint_selected(
             _delete_checkpoint(checkpoint_path)
             append_run_log(wb, endpoint_name, mode, rows_written, "OK", None)
             save_workbook_atomic(wb, excel_path)
-
-            try:
-                from xero_db import save_endpoint_to_db
-
-                db_rows = []
-                if sheet_name in wb.sheetnames:
-                    ws_db = wb[sheet_name]
-                    if ws_db.max_row >= 2:
-                        headers_row = [c.value for c in ws_db[1]]
-                        for r in range(2, ws_db.max_row + 1):
-                            row_dict = {}
-                            for c_idx, col_name in enumerate(headers_row, start=1):
-                                row_dict[col_name] = ws_db.cell(row=r, column=c_idx).value
-                            db_rows.append(row_dict)
-
-                db_written = save_endpoint_to_db("JournalLines", db_rows, selected_columns)
-                if db_written:
-                    logger.info("JournalLines: wrote %s rows to DB (xero.JournalLines)", db_written)
-            except Exception as db_err:
-                logger.warning("DB write skipped for JournalLines: %s", db_err)
 
             logger.info(
                 "JournalLines fill complete: lines_written=%s journals_touched=%s changed=%s markers_appended=%s",
