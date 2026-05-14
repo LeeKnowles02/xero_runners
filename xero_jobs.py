@@ -52,6 +52,9 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Organisation",
         "root": "Organisations",
         "paged": False,
+        # XR-021: overlap buffer applied to If-Modified-Since to absorb clock skew and mid-run updates.
+        # Organisation rarely changes; small buffer is plenty.
+        "incremental_overlap_seconds": 60,
         "columns": [
             "OrganisationID", "Name", "BaseCurrency", "CountryCode",
             "Version", "OrganisationEntityType", "FinancialYearEndDay",
@@ -63,6 +66,9 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Journals",
         "root": "Journals",
         "paged": True,
+        # XR-021: Journals already has its own JOURNALS_CREATED_BUFFER_DAYS (7-day) overlap window,
+        # so the header-level buffer is intentionally 0 here to avoid double-discounting.
+        "incremental_overlap_seconds": 0,
         "columns": ["JournalID", "JournalNumber", "JournalDate", "CreatedDateUTC", "Reference", "SourceID", "SourceType"],
     },
     "JournalLines": {
@@ -70,6 +76,9 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "root": "JournalLines",
         "paged": False,
         "special": "journal_lines",
+        # XR-021: JournalLines doesn't use If-Modified-Since (hash-based, header-driven re-fetch).
+        # Value is documented but unused.
+        "incremental_overlap_seconds": 0,
         "columns": [
             "JournalID",
             "JournalNumber",
@@ -88,12 +97,17 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Contacts",
         "root": "Contacts",
         "paged": False,
+        # XR-021: Contacts change regularly during business hours; 10-minute overlap buffer.
+        "incremental_overlap_seconds": 600,
         "columns": ["ContactID", "Name", "EmailAddress", "ContactStatus", "IsCustomer", "IsSupplier", "UpdatedDateUTC"],
     },
     "Invoices": {
         "path": "/Invoices",
         "root": "Invoices",
         "paged": True,
+        # XR-021: Invoices are the most exposed to race conditions on long runs (paginated, often hundreds).
+        # 10-minute overlap absorbs both clock skew and mid-run updates.
+        "incremental_overlap_seconds": 600,
         "columns": [
             "InvoiceID", "InvoiceNumber", "Type", "Status", "Date", "DueDate", "UpdatedDateUTC",
             "Contact.ContactID", "Contact.Name",
@@ -106,6 +120,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Payments",
         "root": "Payments",
         "paged": True,
+        # XR-021: payments updated regularly through the day. 10-minute buffer.
+        "incremental_overlap_seconds": 600,
         "columns": [
             "PaymentID", "Invoice.InvoiceID", "Invoice.InvoiceNumber", "Date", "Amount",
             "Reference", "CurrencyRate", "UpdatedDateUTC",
@@ -115,6 +131,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/BankTransactions",
         "root": "BankTransactions",
         "paged": True,
+        # XR-021: bank transactions are mutated by reconciliations and rules. 10-minute buffer.
+        "incremental_overlap_seconds": 600,
         "columns": [
             "BankTransactionID", "Type", "Status", "Date", "Reference",
             "Contact.ContactID", "Contact.Name",
@@ -127,6 +145,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Accounts",
         "root": "Accounts",
         "paged": False,
+        # XR-021: chart of accounts changes infrequently. 1-minute buffer is plenty.
+        "incremental_overlap_seconds": 60,
         "columns": [
             "AccountID", "Code", "Name", "Type", "Class", "Status",
             "TaxType", "EnablePaymentsToAccount", "UpdatedDateUTC",
@@ -136,6 +156,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/TrackingCategories",
         "root": "TrackingCategories",
         "paged": False,
+        # XR-021: rarely changes. 1-minute buffer.
+        "incremental_overlap_seconds": 60,
         "columns": [
             "TrackingCategoryID", "Name", "Status",
             "Options",
@@ -145,6 +167,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/TaxRates",
         "root": "TaxRates",
         "paged": False,
+        # XR-021: tax rates rarely change. 1-minute buffer.
+        "incremental_overlap_seconds": 60,
         "columns": [
             "TaxType", "Name", "Status", "ReportTaxType", "CanApplyToAssets",
             "CanApplyToEquity", "CanApplyToExpenses", "CanApplyToLiabilities",
@@ -572,9 +596,25 @@ def _load_existing_row_keys(ws, columns: List[str]) -> Set[str]:
 # ---------------------------
 # HTTP helpers
 # ---------------------------
-def _add_if_modified_since(headers: Dict[str, str], watermark_iso: str) -> Dict[str, str]:
+def _add_if_modified_since(
+    headers: Dict[str, str],
+    watermark_iso: str,
+    overlap_seconds: int = 0,
+) -> Dict[str, str]:
+    """
+    Build an If-Modified-Since header from an ISO watermark.
+
+    XR-021: an `overlap_seconds` buffer is subtracted from the watermark before formatting.
+    This absorbs three real-world problems:
+      - Client/server clock skew.
+      - Mid-run updates (a record modified between two pages we've already fetched).
+      - RFC 5322's 1-second granularity vs Xero's higher-resolution UpdatedDateUTC.
+    Buffer values are configured per-endpoint via ENDPOINTS[...]['incremental_overlap_seconds'].
+    """
     out = dict(headers)
     dt = iso_to_dt(watermark_iso)
+    if overlap_seconds and overlap_seconds > 0:
+        dt = dt - timedelta(seconds=overlap_seconds)
     out["If-Modified-Since"] = format_datetime(dt)
     return out
 
@@ -592,8 +632,13 @@ def _fetch_generic_endpoint(
     path = cfg["path"]
     root = cfg["root"]
     paged = cfg.get("paged", False)
+    # XR-021: apply per-endpoint overlap buffer to the If-Modified-Since header.
+    overlap_seconds = int(cfg.get("incremental_overlap_seconds", 0))
     url = f"{XERO_API_BASE}{path}"
-    use_headers = _add_if_modified_since(headers, incremental_since_iso) if incremental_since_iso else dict(headers)
+    use_headers = (
+        _add_if_modified_since(headers, incremental_since_iso, overlap_seconds)
+        if incremental_since_iso else dict(headers)
+    )
     all_items: List[Dict[str, Any]] = []
 
     if paged:
@@ -890,7 +935,10 @@ def _fetch_journals_offset(
 ) -> Tuple[List[Dict[str, Any]], bool]:
     use_headers = headers
     if incremental_since_iso:
-        use_headers = _add_if_modified_since(headers, incremental_since_iso)
+        # XR-021: Journals has its own 7-day CreatedDateUTC buffer (JOURNALS_CREATED_BUFFER_DAYS),
+        # so the per-endpoint header overlap is intentionally 0 here. Wired through for consistency.
+        overlap_seconds = int(ENDPOINTS["Journals"].get("incremental_overlap_seconds", 0))
+        use_headers = _add_if_modified_since(headers, incremental_since_iso, overlap_seconds)
 
     url = f"{XERO_API_BASE}/Journals"
     out_items: List[Dict[str, Any]] = []
