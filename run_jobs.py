@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 import argparse
 import logging
 from dotenv import load_dotenv
@@ -84,7 +85,17 @@ def main():
 
     headers = xero.headers()
 
+    # XR-005: track endpoint failures so we can exit non-zero at the end.
+    # launchd / cron / CI use the exit code to decide whether a run succeeded;
+    # silently exiting 0 after partial failures masked real problems.
+    failures = 0
+
     for ep in endpoints:
+        # XR-006: refresh headers per endpoint so a long batch doesn't reuse a 30-min-stale token.
+        # xero.headers() -> ensure_valid_access_token() is a cheap memory check when the token
+        # is still valid; it only triggers a refresh HTTP call once expiry is reached.
+        headers = xero.headers()
+
         cols = state.get_preset(ep) or endpoint_columns(ep)
         watermark = state.get_watermark(ep) if incremental else None
 
@@ -102,7 +113,9 @@ def main():
         )
 
         if status == "OK":
-            state.set_watermark(ep, run_start_iso)  # XR-020
+            state.set_watermark_now(ep)
+        else:
+            failures += 1  # XR-005
 
         logger.info("%s: %s rows=%s mode=%s err=%s", ep, status, rows, mode, err)
         print(f"{ep}: {status} rows={rows} mode={mode} err={err}")
@@ -114,17 +127,27 @@ def main():
         if _batch_t0 is not None:
             dur = int((_time.perf_counter() - _batch_t0) * 1000)
             integration_db_log.log_info(
-                f"CLI run_jobs batch finished: {len(endpoints)} endpoint(s) processed",
+                f"CLI run_jobs batch finished: {len(endpoints)} endpoint(s) processed, "
+                f"{failures} failure(s)",
                 event_type="run_jobs.batch.completed",
                 module_name="run_jobs",
                 function_name="main",
                 status=integration_db_log.STATUS_SUCCESS,
                 duration_ms=dur,
-                detail=f"endpoints={endpoints!r}; incremental={incremental}",
+                detail=f"endpoints={endpoints!r}; incremental={incremental}; failures={failures}",
             )
         integration_db_log.set_log_context(clear=True)
     except Exception:
         pass
+
+    # XR-005: tell the scheduler the truth. Any non-OK endpoint => exit non-zero.
+    # launchd / cron / a future Azure Function Timer will read this exit code.
+    if failures:
+        logger.warning(
+            "XR-005: %s of %s endpoint(s) failed. Exiting with code 1.",
+            failures, len(endpoints)
+        )
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
