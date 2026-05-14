@@ -4,3 +4,4 @@ openpyxl
 werkzeug
 sqlalchemy
 pyodbc
+python-dotenv

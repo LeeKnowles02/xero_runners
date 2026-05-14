@@ -23,6 +23,7 @@ from xero_jobs import (
 )
 from xero_db import test_database_connection_and_seed, clear_connection_test_data, get_pipeline_history
 from xero_test import run_sample_db_test, run_incremental_validation_test, clear_test_rows
+from state_store import utc_now_iso  # XR-020
 
 
 def _attach_download_token_cookie(response):
@@ -248,6 +249,11 @@ def register_api(app, xero, state, logger):
             except Exception:
                 pass
 
+            # XR-020: capture run-start BEFORE making any HTTP calls.
+            # On success we set the watermark to this timestamp (not utc_now_iso()),
+            # so records modified DURING the run are still picked up by the next pull.
+            run_start_iso = utc_now_iso()
+
             rows, status, mode, err = run_endpoint_selected(
                 endpoint_name=endpoint,
                 headers=headers,
@@ -258,7 +264,7 @@ def register_api(app, xero, state, logger):
 
             new_watermark = None
             if status == "OK":
-                new_watermark = state.set_watermark_now(endpoint)
+                new_watermark = state.set_watermark(endpoint, run_start_iso)  # XR-020
 
             logger.info("Run complete endpoint=%s status=%s rows=%s mode=%s", endpoint, status, rows, mode)
 
