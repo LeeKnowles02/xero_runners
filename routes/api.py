@@ -23,6 +23,24 @@ from xero_jobs import (
 )
 from xero_db import test_database_connection_and_seed, clear_connection_test_data, get_pipeline_history
 from xero_test import run_sample_db_test, run_incremental_validation_test, clear_test_rows
+from state_store import utc_now_iso  # XR-020
+
+
+def _attach_download_token_cookie(response):
+    """
+    Loader handshake: browser polls document.cookie for unleashed_download_token
+    after file downloads (form POST or fetch with credentials).
+    """
+    token = request.args.get("download_token") or request.form.get("download_token")
+    if token:
+        response.set_cookie(
+            "unleashed_download_token",
+            token,
+            max_age=120,
+            samesite="Lax",
+            path="/",
+        )
+    return response
 
 
 def _pipeline_xero_auth_error(e: Exception, logger) -> tuple:
@@ -192,6 +210,28 @@ def register_api(app, xero, state, logger):
         endpoint = payload.get("endpoint")
         columns = payload.get("columns")
         incremental = bool(payload.get("incremental", False))
+        _t0 = time.perf_counter()
+
+        # DB audit: UI-triggered sync — correlates with xero_jobs run_id via request X-Correlation-ID.
+        try:
+            import integration_db_log
+
+            integration_db_log.log_ui_action(
+                route="/api/run",
+                action="endpoint.run.requested",
+                payload_summary=integration_db_log.payload_summary_from_obj(
+                    {"endpoint": endpoint, "incremental": incremental, "has_column_override": bool(columns)}
+                ),
+                status=integration_db_log.STATUS_IN_PROGRESS,
+                message=(
+                    f"Dashboard requested a sync for endpoint={endpoint!r}; incremental={incremental}. "
+                    "Next: resolve preset columns, read incremental watermark, obtain Xero headers (tenant), "
+                    "then run_endpoint_selected (API + DB + workbook)."
+                ),
+                function_name="api_run",
+            )
+        except Exception:
+            pass
 
         try:
             if not columns:
@@ -202,6 +242,18 @@ def register_api(app, xero, state, logger):
             watermark = state.get_watermark(endpoint) if incremental else None
 
             headers = xero.headers()
+            try:
+                import integration_db_log
+
+                integration_db_log.set_log_context(tenant_id=headers.get("xero-tenant-id"))
+            except Exception:
+                pass
+
+            # XR-020: capture run-start BEFORE making any HTTP calls.
+            # On success we set the watermark to this timestamp (not utc_now_iso()),
+            # so records modified DURING the run are still picked up by the next pull.
+            run_start_iso = utc_now_iso()
+
             rows, status, mode, err = run_endpoint_selected(
                 endpoint_name=endpoint,
                 headers=headers,
@@ -212,9 +264,38 @@ def register_api(app, xero, state, logger):
 
             new_watermark = None
             if status == "OK":
-                new_watermark = state.set_watermark_now(endpoint)
+                new_watermark = state.set_watermark(endpoint, run_start_iso)  # XR-020
 
             logger.info("Run complete endpoint=%s status=%s rows=%s mode=%s", endpoint, status, rows, mode)
+
+            try:
+                import integration_db_log
+
+                dur = int((time.perf_counter() - _t0) * 1000)
+                integration_db_log.log_ui_action(
+                    route="/api/run",
+                    action="endpoint.run.completed",
+                    payload_summary=integration_db_log.payload_summary_from_obj(
+                        {"endpoint": endpoint, "status": status, "mode": mode, "err": err}
+                    ),
+                    status=integration_db_log.STATUS_SUCCESS if status == "OK" else integration_db_log.STATUS_FAILED,
+                    message=(
+                        f"UI sync finished: endpoint={endpoint!r}; http/sync status={status}; mode={mode}; "
+                        f"rows_written={rows}; worker_error={err!r}. "
+                        "If status is not OK, inspect integration_log for the same correlation_id and the "
+                        "endpoint.run rows; verify tenant and token refresh."
+                    ),
+                    duration_ms=dur,
+                    function_name="api_run",
+                    tenant_id=headers.get("xero-tenant-id"),
+                    detail=(
+                        f"incremental_since_iso={watermark!r}; watermark_after={new_watermark!r}; "
+                        f"excel_path={EXCEL_PATH}"
+                    ),
+                    record_count=rows if status == "OK" else None,
+                )
+            except Exception:
+                pass
 
             return jsonify({
                 "ok": status == "OK",
@@ -228,6 +309,29 @@ def register_api(app, xero, state, logger):
                 "watermark_after": new_watermark,
             })
         except Exception as e:
+            try:
+                import integration_db_log
+
+                dur = int((time.perf_counter() - _t0) * 1000)
+                integration_db_log.log_exception(
+                    "UI /api/run raised an exception (before successful JSON response)",
+                    e,
+                    endpoint=str(endpoint),
+                    step_name="api_run",
+                    detail="Check token/tenant, endpoint name, and column preset; see stack_trace.",
+                    duration_ms=dur,
+                )
+                integration_db_log.log_ui_action(
+                    route="/api/run",
+                    action="endpoint.run.failed",
+                    payload_summary=integration_db_log.payload_summary_from_obj({"endpoint": endpoint}),
+                    status="FAILED",
+                    message=f"Unhandled exception in api_run: {type(e).__name__}: {e}",
+                    duration_ms=dur,
+                    function_name="api_run",
+                )
+            except Exception:
+                pass
             logger.exception("Run failed endpoint=%s", endpoint)
             return jsonify({"ok": False, "endpoint": endpoint, "status": "FAILED", "error": str(e)}), 500
 
@@ -244,19 +348,23 @@ def register_api(app, xero, state, logger):
             if buf is None:
                 return jsonify({"ok": False, "error": f"No sheet for endpoint '{endpoint}' yet. Run that endpoint first."}), 404
             safe_name = endpoint.replace("/", "-").replace("\\", "-")[:50]
-            return send_file(
-                buf,
-                as_attachment=True,
-                download_name=f"xero_{safe_name}.xlsx",
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            return _attach_download_token_cookie(
+                send_file(
+                    buf,
+                    as_attachment=True,
+                    download_name=f"xero_{safe_name}.xlsx",
+                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
             )
         if not os.path.isfile(EXCEL_PATH):
             return jsonify({"ok": False, "error": "Excel file not found. Run an endpoint first."}), 404
-        return send_file(
-            EXCEL_PATH,
-            as_attachment=True,
-            download_name="xero_endpoints.xlsx",
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        return _attach_download_token_cookie(
+            send_file(
+                EXCEL_PATH,
+                as_attachment=True,
+                download_name="xero_endpoints.xlsx",
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
         )
 
     @app.post("/api/open_excel")

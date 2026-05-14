@@ -2,6 +2,7 @@
 Xero Runner – entry point.
 Run with: python app.py
 """
+import os
 import webbrowser
 
 from flask import Flask
@@ -12,6 +13,7 @@ from config import (
     TOKEN_PATH,
     STATE_PATH,
     EXCEL_PATH,
+    DATA_DIR,
     ensure_creds,
     get_scopes,
     LOG_PATH,
@@ -37,7 +39,29 @@ xero = XeroAuth(
 )
 ensure_excel(EXCEL_PATH)
 
+# DB audit: app lifecycle (no secrets — client id/secret are never logged).
+try:
+    import integration_db_log
+
+    integration_db_log.log_info(
+        "Application startup: Flask app constructed; config and paths loaded. "
+        "Next: register routes, then listen. If sync fails, check integration_log for correlation_id from API responses.",
+        event_type="app.lifecycle.startup",
+        module_name="app",
+        function_name="<module>",
+        status=integration_db_log.STATUS_SUCCESS,
+        detail=(
+            f"PORT={PORT}; REDIRECT_URI={REDIRECT_URI}; "
+            f"DATA_DIR={DATA_DIR}; TOKEN_PATH={TOKEN_PATH}; EXCEL_PATH={EXCEL_PATH}; "
+            f"STATE_PATH={STATE_PATH}; LOG_PATH={LOG_PATH}; "
+            f"scopes_length={len(get_scopes())}; oauth_credentials_present=yes"
+        ),
+    )
+except Exception:
+    pass
+
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dev-xero-runner-flask-secret-change-me"
 register_routes(app, xero, state, token_store, client_id, client_secret, logger)
 
 if __name__ == "__main__":

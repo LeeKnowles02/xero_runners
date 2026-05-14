@@ -38,6 +38,7 @@
           <a href="/" class="{% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
           <a href="/settings" class="{% if active_page == 'settings' %}active{% endif %}">Settings</a>
           <a href="/pipeline-control" class="{% if active_page == 'pipeline_control' %}active{% endif %}">Data Pipeline Control</a>
+          <a href="/xero/exchange-rates" class="{% if active_page == 'exchange_rates' %}active{% endif %}">Exchange Rates</a>
         </nav>
 
         <div class="sidebar-options">
@@ -60,6 +61,27 @@
         </div>
       </main>
     </div>
+
+    <div
+      id="globalLoader"
+      class="loader hidden"
+      aria-live="polite"
+      aria-busy="false"
+      aria-hidden="true"
+    >
+      <div class="loader-content" role="status">
+        <div class="spinner" aria-hidden="true"></div>
+        <div id="loaderText" class="loader-text">Processing…</div>
+        <div class="loader-progress" aria-hidden="true">
+          <div class="loader-progress-indeterminate"></div>
+        </div>
+        <div class="loader-actions">
+          <button type="button" id="loaderCancelButton" class="btn btn-secondary btn-sm">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/loading.js') }}"></script>
 
     <script>
       (function() {
@@ -92,5 +114,16 @@
     </script>
     {% block scripts %}
     {% endblock %}
+    <script>
+      (function () {
+        var el = document.getElementById("globalLoader");
+        if (!el) return;
+        var mo = new MutationObserver(function () {
+          var hidden = el.classList.contains("hidden");
+          el.setAttribute("aria-hidden", hidden ? "true" : "false");
+        });
+        mo.observe(el, { attributes: true, attributeFilter: ["class"] });
+      })();
+    </script>
   </body>
 </html>

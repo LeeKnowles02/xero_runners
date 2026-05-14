@@ -55,6 +55,9 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Organisation",
         "root": "Organisations",
         "paged": False,
+        # XR-021: overlap buffer applied to If-Modified-Since to absorb clock skew and mid-run updates.
+        # Organisation rarely changes; small buffer is plenty.
+        "incremental_overlap_seconds": 60,
         "columns": [
             "OrganisationID", "Name", "BaseCurrency", "CountryCode",
             "Version", "OrganisationEntityType", "FinancialYearEndDay",
@@ -66,6 +69,9 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Journals",
         "root": "Journals",
         "paged": True,
+        # XR-021: Journals already has its own JOURNALS_CREATED_BUFFER_DAYS (7-day) overlap window,
+        # so the header-level buffer is intentionally 0 here to avoid double-discounting.
+        "incremental_overlap_seconds": 0,
         "columns": ["JournalID", "JournalNumber", "JournalDate", "CreatedDateUTC", "Reference", "SourceID", "SourceType"],
     },
     "JournalLines": {
@@ -73,6 +79,9 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "root": "JournalLines",
         "paged": False,
         "special": "journal_lines",
+        # XR-021: JournalLines doesn't use If-Modified-Since (hash-based, header-driven re-fetch).
+        # Value is documented but unused.
+        "incremental_overlap_seconds": 0,
         "columns": [
             "JournalID",
             "JournalNumber",
@@ -91,12 +100,17 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Contacts",
         "root": "Contacts",
         "paged": False,
+        # XR-021: Contacts change regularly during business hours; 10-minute overlap buffer.
+        "incremental_overlap_seconds": 600,
         "columns": ["ContactID", "Name", "EmailAddress", "ContactStatus", "IsCustomer", "IsSupplier", "UpdatedDateUTC"],
     },
     "Invoices": {
         "path": "/Invoices",
         "root": "Invoices",
         "paged": True,
+        # XR-021: Invoices are the most exposed to race conditions on long runs (paginated, often hundreds).
+        # 10-minute overlap absorbs both clock skew and mid-run updates.
+        "incremental_overlap_seconds": 600,
         "columns": [
             "InvoiceID", "InvoiceNumber", "Type", "Status", "Date", "DueDate", "UpdatedDateUTC",
             "Contact.ContactID", "Contact.Name",
@@ -109,6 +123,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Payments",
         "root": "Payments",
         "paged": True,
+        # XR-021: payments updated regularly through the day. 10-minute buffer.
+        "incremental_overlap_seconds": 600,
         "columns": [
             "PaymentID", "Invoice.InvoiceID", "Invoice.InvoiceNumber", "Date", "Amount",
             "Reference", "CurrencyRate", "UpdatedDateUTC",
@@ -118,6 +134,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/BankTransactions",
         "root": "BankTransactions",
         "paged": True,
+        # XR-021: bank transactions are mutated by reconciliations and rules. 10-minute buffer.
+        "incremental_overlap_seconds": 600,
         "columns": [
             "BankTransactionID", "Type", "Status", "Date", "Reference",
             "Contact.ContactID", "Contact.Name",
@@ -130,6 +148,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/Accounts",
         "root": "Accounts",
         "paged": False,
+        # XR-021: chart of accounts changes infrequently. 1-minute buffer is plenty.
+        "incremental_overlap_seconds": 60,
         "columns": [
             "AccountID", "Code", "Name", "Type", "Class", "Status",
             "TaxType", "EnablePaymentsToAccount", "UpdatedDateUTC",
@@ -139,6 +159,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/TrackingCategories",
         "root": "TrackingCategories",
         "paged": False,
+        # XR-021: rarely changes. 1-minute buffer.
+        "incremental_overlap_seconds": 60,
         "columns": [
             "TrackingCategoryID", "Name", "Status",
             "Options",
@@ -148,6 +170,8 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "path": "/TaxRates",
         "root": "TaxRates",
         "paged": False,
+        # XR-021: tax rates rarely change. 1-minute buffer.
+        "incremental_overlap_seconds": 60,
         "columns": [
             "TaxType", "Name", "Status", "ReportTaxType", "CanApplyToAssets",
             "CanApplyToEquity", "CanApplyToExpenses", "CanApplyToLiabilities",
@@ -575,9 +599,25 @@ def _load_existing_row_keys(ws, columns: List[str]) -> Set[str]:
 # ---------------------------
 # HTTP helpers
 # ---------------------------
-def _add_if_modified_since(headers: Dict[str, str], watermark_iso: str) -> Dict[str, str]:
+def _add_if_modified_since(
+    headers: Dict[str, str],
+    watermark_iso: str,
+    overlap_seconds: int = 0,
+) -> Dict[str, str]:
+    """
+    Build an If-Modified-Since header from an ISO watermark.
+
+    XR-021: an `overlap_seconds` buffer is subtracted from the watermark before formatting.
+    This absorbs three real-world problems:
+      - Client/server clock skew.
+      - Mid-run updates (a record modified between two pages we've already fetched).
+      - RFC 5322's 1-second granularity vs Xero's higher-resolution UpdatedDateUTC.
+    Buffer values are configured per-endpoint via ENDPOINTS[...]['incremental_overlap_seconds'].
+    """
     out = dict(headers)
     dt = iso_to_dt(watermark_iso)
+    if overlap_seconds and overlap_seconds > 0:
+        dt = dt - timedelta(seconds=overlap_seconds)
     out["If-Modified-Since"] = format_datetime(dt)
     return out
 
@@ -595,8 +635,13 @@ def _fetch_generic_endpoint(
     path = cfg["path"]
     root = cfg["root"]
     paged = cfg.get("paged", False)
+    # XR-021: apply per-endpoint overlap buffer to the If-Modified-Since header.
+    overlap_seconds = int(cfg.get("incremental_overlap_seconds", 0))
     url = f"{XERO_API_BASE}{path}"
-    use_headers = _add_if_modified_since(headers, incremental_since_iso) if incremental_since_iso else dict(headers)
+    use_headers = (
+        _add_if_modified_since(headers, incremental_since_iso, overlap_seconds)
+        if incremental_since_iso else dict(headers)
+    )
     all_items: List[Dict[str, Any]] = []
 
     if paged:
@@ -625,6 +670,28 @@ def _fetch_generic_endpoint(
             all_items = [raw]
         else:
             all_items = []
+
+    try:
+        import integration_db_log
+
+        integration_db_log.log_info(
+            f"Fetched {endpoint_name}: {len(all_items)} item(s); paged={paged}. "
+            f"Next step: merge/write to Excel and xero.{endpoint_name.replace(' ', '_')}.",
+            event_type="api.fetch.completed",
+            module_name="xero_jobs",
+            function_name="_fetch_generic_endpoint",
+            endpoint=endpoint_name,
+            entity_name=root,
+            record_count=len(all_items),
+            status=integration_db_log.STATUS_SUCCESS,
+            step_name="_fetch_generic_endpoint",
+            detail=f"path={path}; incremental_since_iso={incremental_since_iso}",
+            payload_summary=integration_db_log.payload_summary_from_obj(
+                {"url": url, "paged": paged, "if_modified_since": bool(incremental_since_iso)}
+            ),
+        )
+    except Exception:
+        pass
 
     return all_items
 
@@ -683,6 +750,79 @@ def _force_refresh_headers(
 XERO_REQUEST_TIMEOUT = int(os.getenv("XERO_REQUEST_TIMEOUT", "120"))
 
 
+def _integration_log_run_done(
+    endpoint_name: str,
+    rows_written: int,
+    status: str,
+    mode: str,
+    err: Optional[str],
+    t0: float,
+) -> None:
+    """DB audit: endpoint run completed; closes xero.sync_run and writes integration_log event."""
+    try:
+        import integration_db_log
+
+        ok = status == "OK"
+        evt_status = integration_db_log.STATUS_SUCCESS if ok else integration_db_log.STATUS_FAILED
+        integration_db_log.log_info(
+            f"Endpoint run finished: {endpoint_name} worker_status={status} rows_written={rows_written}",
+            event_type="endpoint.run.completed",
+            module_name="xero_jobs",
+            function_name="run_endpoint_selected",
+            endpoint=endpoint_name,
+            status=evt_status,
+            step_name="run_endpoint_selected",
+            record_count=rows_written,
+            duration_ms=int((time.perf_counter() - t0) * 1000),
+            detail=f"mode={mode}" + (f"; error={err}" if err else ""),
+        )
+        rid = integration_db_log.get_log_context().get("run_id")
+        if rid:
+            integration_db_log.complete_sync_run(
+                rid,
+                final_status=integration_db_log.STATUS_SUCCESS if ok else integration_db_log.STATUS_FAILED,
+                total_records=rows_written,
+                total_errors=0 if ok else 1,
+                message=(err or None) if not ok else None,
+            )
+    except Exception:
+        pass
+
+
+def _requests_get_with_log(
+    url: str,
+    headers: Dict[str, str],
+    params: Optional[Dict[str, Any]],
+    *,
+    attempt: int,
+    substep: str,
+) -> requests.Response:
+    """GET with integration_db_log timing and safe response capture."""
+    t0 = time.perf_counter()
+    r = requests.get(url, headers=headers, params=params or {}, timeout=XERO_REQUEST_TIMEOUT)
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    try:
+        import integration_db_log
+
+        if integration_db_log.is_enabled():
+            integration_db_log.log_http_response(
+                request_url=url,
+                request_method="GET",
+                request_params=params,
+                request_headers=headers,
+                status_code=r.status_code,
+                duration_ms=elapsed_ms,
+                response_text=r.text if getattr(r, "text", None) else None,
+                step_name=f"{substep} attempt={attempt}",
+                tenant_id=headers.get("xero-tenant-id"),
+                endpoint=substep,
+                message=f"GET {substep} HTTP {r.status_code} in {elapsed_ms}ms",
+            )
+    except Exception:
+        pass
+    return r
+
+
 def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None) -> requests.Response:
     max_attempts = 8
     base_sleep = 1.0
@@ -694,7 +834,9 @@ def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]
 
         for conn_attempt in range(conn_retries):
             try:
-                r = requests.get(url, headers=headers, params=params or {}, timeout=XERO_REQUEST_TIMEOUT)
+                r = _requests_get_with_log(
+                    url, headers, params, attempt=attempt, substep="xero.api.get"
+                )
                 break
             except (RequestsConnectionError, Urllib3ProtocolError, OSError) as conn_err:
                 if conn_attempt < conn_retries - 1:
@@ -716,7 +858,9 @@ def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]
                 logger.warning("Xero 401: reloaded Authorization from token file; retrying url=%s", url)
                 headers.update(new_headers)
                 time.sleep(XERO_THROTTLE_SECONDS)
-                r = requests.get(url, headers=headers, params=params or {}, timeout=XERO_REQUEST_TIMEOUT)
+                r = _requests_get_with_log(
+                    url, headers, params, attempt=attempt, substep="xero.api.get.after_401_reload"
+                )
                 if r.status_code == 304:
                     return r
                 if r.status_code == 200:
@@ -727,7 +871,9 @@ def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]
                 logger.warning("Xero 401: forced token refresh; retrying url=%s", url)
                 headers.update(forced)
                 time.sleep(XERO_THROTTLE_SECONDS)
-                r = requests.get(url, headers=headers, params=params or {}, timeout=XERO_REQUEST_TIMEOUT)
+                r = _requests_get_with_log(
+                    url, headers, params, attempt=attempt, substep="xero.api.get.after_force_refresh"
+                )
                 if r.status_code == 304:
                     return r
                 if r.status_code == 200:
@@ -792,7 +938,10 @@ def _fetch_journals_offset(
 ) -> Tuple[List[Dict[str, Any]], bool]:
     use_headers = headers
     if incremental_since_iso:
-        use_headers = _add_if_modified_since(headers, incremental_since_iso)
+        # XR-021: Journals has its own 7-day CreatedDateUTC buffer (JOURNALS_CREATED_BUFFER_DAYS),
+        # so the per-endpoint header overlap is intentionally 0 here. Wired through for consistency.
+        overlap_seconds = int(ENDPOINTS["Journals"].get("incremental_overlap_seconds", 0))
+        use_headers = _add_if_modified_since(headers, incremental_since_iso, overlap_seconds)
 
     url = f"{XERO_API_BASE}/Journals"
     out_items: List[Dict[str, Any]] = []
@@ -881,6 +1030,27 @@ def _fetch_journals_offset(
 
         last_offset = next_offset
         offset = next_offset
+
+    try:
+        import integration_db_log
+
+        integration_db_log.log_info(
+            f"Journals offset pagination finished: collected={len(out_items)} journal(s), "
+            f"reached_created_cutoff={reached_cutoff}. "
+            f"If count is zero, check date filters and tenant scope.",
+            event_type="api.journals.pagination.completed",
+            module_name="xero_jobs",
+            function_name="_fetch_journals_offset",
+            endpoint="/Journals",
+            record_count=len(out_items),
+            status="OK",
+            detail=(
+                f"batch_limit={batch_limit}; incremental_since_iso={incremental_since_iso}; "
+                f"stop_after_no_new_batches={stop_after_no_new_batches}"
+            ),
+        )
+    except Exception:
+        pass
 
     return out_items, reached_cutoff
 
@@ -1048,6 +1218,39 @@ def run_endpoint_selected(
     """
     ensure_excel(excel_path)
     wb = load_workbook(excel_path)
+    _run_t0 = time.perf_counter()
+    try:
+        import integration_db_log
+
+        _run_id = integration_db_log.new_run_id()
+        integration_db_log.start_sync_run(
+            _run_id,
+            correlation_id=integration_db_log.get_log_context().get("correlation_id"),
+            tenant_id=headers.get("xero-tenant-id"),
+            endpoint_name=endpoint_name,
+        )
+        integration_db_log.set_log_context(
+            run_id=_run_id,
+            tenant_id=headers.get("xero-tenant-id"),
+        )
+        integration_db_log.log_info(
+            f"Endpoint run started: {endpoint_name}",
+            event_type="endpoint.run.started",
+            module_name="xero_jobs",
+            function_name="run_endpoint_selected",
+            endpoint=endpoint_name,
+            status=integration_db_log.STATUS_IN_PROGRESS,
+            step_name="run_endpoint_selected",
+            detail=(
+                f"excel_path={excel_path}; mode={mode}; incremental_since_iso={incremental_since_iso}; "
+                f"max_journals={max_journals}; start_after={start_after}"
+            ),
+            payload_summary=integration_db_log.payload_summary_from_obj(
+                {"column_count": len(selected_columns or []), "endpoint": endpoint_name}
+            ),
+        )
+    except Exception:
+        pass
 
     # XR-024: track rows actually written so far in this run.
     # If we crash mid-flight, the FAILED entry in the run log should report the real number,
@@ -1090,11 +1293,9 @@ def run_endpoint_selected(
             autosize_columns(ws_sample)
             append_run_log(wb, endpoint_name, mode_label, appended, "OK", None)
             save_workbook_atomic(wb, excel_path)
-            logger.info(
-                "JournalLines test mode=%s journals=%s lines=%s appended=%s",
-                mode, len(journals), len(line_rows), appended
-            )
-            return appended, "OK", mode_label, None
+            logger.info("JournalLines test mode=%s journals=%s lines=%s", mode, len(journals), len(line_rows))
+            _integration_log_run_done(endpoint_name, len(line_rows), "OK", mode_label, None, _run_t0)
+            return len(line_rows), "OK", mode_label, None
 
         # -----------------------
         # Journals: bulletproof run
@@ -1163,6 +1364,7 @@ def run_endpoint_selected(
                 logger.warning("DB write skipped for Journals: %s", db_err)
 
             logger.info("Wrote %s rows to %s (mode=%s)", rows_written, endpoint_name, mode2)
+            _integration_log_run_done(endpoint_name, rows_written, "OK", mode2, None, _run_t0)
             return rows_written, "OK", mode2, None
 
         # -----------------------
@@ -1249,6 +1451,21 @@ def run_endpoint_selected(
                 append_run_log(wb, endpoint_name, mode, 0, "OK", None)
                 _delete_checkpoint(checkpoint_path)
                 save_workbook_atomic(wb, excel_path)
+                try:
+                    import integration_db_log
+
+                    integration_db_log.log_info(
+                        "JournalLines: nothing to process (pending_ids empty). Zero records written.",
+                        event_type="transform.zero_records",
+                        module_name="xero_jobs",
+                        function_name="run_endpoint_selected",
+                        endpoint="JournalLines",
+                        record_count=0,
+                        status="OK",
+                    )
+                except Exception:
+                    pass
+                _integration_log_run_done(endpoint_name, 0, "OK", mode, None, _run_t0)
                 return 0, "OK", mode, None
 
             if sheet_name not in wb.sheetnames:
@@ -1467,6 +1684,7 @@ def run_endpoint_selected(
                 "JournalLines fill complete: lines_written=%s journals_touched=%s changed=%s markers_appended=%s",
                 rows_written, len(pending_ids), len(changed_ids), proc_appended
             )
+            _integration_log_run_done(endpoint_name, rows_written, "OK", mode, None, _run_t0)
             return rows_written, "OK", mode, None
 
         # -----------------------
@@ -1481,6 +1699,24 @@ def run_endpoint_selected(
                 rows_written = 0
                 append_run_log(wb, endpoint_name, mode, 0, "OK", None)
                 save_workbook_atomic(wb, excel_path)
+                try:
+                    import integration_db_log
+
+                    integration_db_log.log_info(
+                        f"Incremental fetch returned zero records for {endpoint_name} "
+                        f"(If-Modified-Since may apply). Check watermark and API data.",
+                        event_type="api.zero_records",
+                        module_name="xero_jobs",
+                        function_name="run_endpoint_selected",
+                        endpoint=endpoint_name,
+                        status=integration_db_log.STATUS_WARNING,
+                        step_name="run_endpoint_selected",
+                        record_count=0,
+                        detail=f"incremental_since_iso={incremental_since_iso}",
+                    )
+                except Exception:
+                    pass
+                _integration_log_run_done(endpoint_name, 0, "OK", mode, None, _run_t0)
                 return 0, "OK", mode, None
             if incremental_since_iso and items:
                 key_col = cols[0] if cols else endpoint_columns(endpoint_name)[0]
@@ -1502,11 +1738,36 @@ def run_endpoint_selected(
                 logger.warning("DB write skipped for %s: %s", endpoint_name, db_err)
 
             logger.info("Generic endpoint %s: wrote %s rows (mode=%s)", endpoint_name, rows_written, mode)
+            _integration_log_run_done(endpoint_name, rows_written, "OK", mode, None, _run_t0)
             return rows_written, "OK", mode, None
 
         raise ValueError(f"Unknown endpoint: {endpoint_name}")
 
     except Exception as e:
+        try:
+            import integration_db_log
+
+            integration_db_log.log_exception(
+                f"Endpoint run failed: {endpoint_name}",
+                e,
+                endpoint=endpoint_name,
+                step_name="run_endpoint_selected",
+                module_name="xero_jobs",
+                function_name="run_endpoint_selected",
+                duration_ms=int((time.perf_counter() - _run_t0) * 1000),
+                detail=f"excel_path={excel_path}; incremental_since_iso={incremental_since_iso}",
+            )
+            rid = integration_db_log.get_log_context().get("run_id")
+            if rid:
+                integration_db_log.complete_sync_run(
+                    rid,
+                    final_status=integration_db_log.STATUS_FAILED,
+                    total_records=0,
+                    total_errors=1,
+                    message=str(e)[:4000],
+                )
+        except Exception:
+            pass
         mode_label = mode if mode != "full" else ("FULL" if not incremental_since_iso else f"INCREMENTAL since {incremental_since_iso}")
         # XR-024: report the rows we actually wrote before failing, not 0.
         # The status stays "FAILED" so callers (run_jobs.py / routes/api.py) still skip the watermark bump.
