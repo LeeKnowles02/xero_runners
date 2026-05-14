@@ -11,6 +11,8 @@ from email.utils import format_datetime
 from typing import Dict, Any, List, Tuple, Optional, Set
 
 import requests
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from urllib3.exceptions import ProtocolError as Urllib3ProtocolError
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
@@ -157,6 +159,7 @@ ENDPOINTS: Dict[str, Dict[str, Any]] = {
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
 def iso_to_dt(s: str) -> datetime:
     """
     Accepts:
@@ -177,6 +180,7 @@ def iso_to_dt(s: str) -> datetime:
         dt = dt.astimezone(timezone.utc)
     return dt
 
+
 def parse_xero_date_maybe(val: Any) -> Any:
     if not isinstance(val, str):
         return val
@@ -186,6 +190,7 @@ def parse_xero_date_maybe(val: Any) -> Any:
     ms = int(m.group(1))
     dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def _dt_from_created_date_maybe(val: Any) -> Optional[datetime]:
     """
@@ -206,10 +211,12 @@ def _dt_from_created_date_maybe(val: Any) -> Optional[datetime]:
 # ---------------------------
 _INVALID_SHEET_CHARS = r'[:\\/?*\[\]]'
 
+
 def excel_safe_sheet_name(name: str) -> str:
     s = re.sub(_INVALID_SHEET_CHARS, "-", (name or "").strip())
     s = s[:31].rstrip()
     return s or "Sheet"
+
 
 def excel_unique_sheet_name(wb, desired: str) -> str:
     base = excel_safe_sheet_name(desired)
@@ -223,6 +230,7 @@ def excel_unique_sheet_name(wb, desired: str) -> str:
             return candidate
     return base[:28] + "_X"
 
+
 def ensure_excel(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path):
@@ -233,8 +241,10 @@ def ensure_excel(path: str) -> None:
     ws.append(["TimestampUTC", "Endpoint", "Mode", "RowsWritten", "Status", "Error"])
     wb.save(path)
 
+
 def _utc_ts_compact() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
 
 def backup_file(path: str, backup_dir: str, tag: str) -> Optional[str]:
     try:
@@ -251,12 +261,14 @@ def backup_file(path: str, backup_dir: str, tag: str) -> Optional[str]:
         logger.warning("Backup failed for %s: %s", path, e)
         return None
 
+
 def save_workbook_atomic(wb, excel_path: str) -> None:
     d = os.path.dirname(excel_path)
     os.makedirs(d, exist_ok=True)
     tmp_path = os.path.join(d, f".tmp_{os.getpid()}_{_utc_ts_compact()}_{os.path.basename(excel_path)}")
     wb.save(tmp_path)
     os.replace(tmp_path, excel_path)
+
 
 def autosize_columns(ws, max_width: int = 60):
     for col_idx, col in enumerate(ws.columns, start=1):
@@ -267,10 +279,12 @@ def autosize_columns(ws, max_width: int = 60):
             length = max(length, len(str(cell.value)))
         ws.column_dimensions[get_column_letter(col_idx)].width = min(max(10, length + 2), max_width)
 
+
 def append_run_log(wb, endpoint: str, mode: str, rows_written: int, status: str, error: Optional[str]) -> None:
     ws = wb["Runs"]
     ws.append([utc_now_iso(), endpoint, mode, rows_written, status, error or ""])
     autosize_columns(ws)
+
 
 def list_endpoints() -> List[str]:
     return list(ENDPOINTS.keys())
@@ -300,10 +314,12 @@ def workbook_with_only_sheet(excel_path: str, endpoint_name: str) -> Optional[By
     buf.seek(0)
     return buf
 
+
 def endpoint_columns(endpoint_name: str) -> List[str]:
     if endpoint_name not in ENDPOINTS:
         raise ValueError(f"Unknown endpoint: {endpoint_name}")
     return ENDPOINTS[endpoint_name]["columns"]
+
 
 # ---- minimal inserts for JournalLines completeness ----
 def _ensure_sheet(wb, sheet_name: str, columns: List[str]):
@@ -314,6 +330,7 @@ def _ensure_sheet(wb, sheet_name: str, columns: List[str]):
     ws = wb[sheet_name]
     _ensure_sheet_header(ws, columns)
     return ws
+
 
 def _load_first_col_set(ws) -> Set[str]:
     out: Set[str] = set()
@@ -333,6 +350,7 @@ def _stable_hash(parts: List[Any]) -> str:
     payload = "\x1f".join("" if p is None else str(p).strip() for p in parts)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
+
 def _journals_header_hash_from_row_values(row_values: List[Any], columns: List[str]) -> str:
     """
     Compute a stable hash of the Journals header row.
@@ -343,6 +361,7 @@ def _journals_header_hash_from_row_values(row_values: List[Any], columns: List[s
     include_idxs = [i for i, c in enumerate(columns) if c != "JournalID"]
     parts = [row_values[i] if i < len(row_values) else None for i in include_idxs]
     return _stable_hash(parts)
+
 
 def _load_journals_header_map(ws_journals, columns: List[str]) -> Dict[str, Dict[str, Any]]:
     """
@@ -364,6 +383,7 @@ def _load_journals_header_map(ws_journals, columns: List[str]) -> Dict[str, Dict
         }
     return out
 
+
 def _max_created_date_from_journals_sheet(ws_journals, journals_cols: List[str]) -> Optional[datetime]:
     """
     Scans CreatedDateUTC column in Journals sheet; returns max datetime (UTC).
@@ -383,6 +403,7 @@ def _max_created_date_from_journals_sheet(ws_journals, journals_cols: List[str])
         if max_dt is None or dt > max_dt:
             max_dt = dt
     return max_dt
+
 
 def _journal_number_set_from_sheet(ws_journals, journals_cols: List[str]) -> Set[int]:
     """
@@ -404,6 +425,7 @@ def _journal_number_set_from_sheet(ws_journals, journals_cols: List[str]) -> Set
         except Exception:
             continue
     return out
+
 
 def _detect_discontinuity(journal_numbers: Set[int]) -> bool:
     """
@@ -439,6 +461,7 @@ def get_by_path(obj: Dict[str, Any], path: str) -> Any:
         return str(cur)
     return cur
 
+
 def _ensure_sheet_header(ws, columns: List[str]) -> None:
     if ws.max_row == 0:
         ws.append(columns)
@@ -448,6 +471,7 @@ def _ensure_sheet_header(ws, columns: List[str]) -> None:
         if existing != columns:
             ws.delete_rows(1, ws.max_row)
             ws.append(columns)
+
 
 def write_sheet_selected_columns(wb, sheet_name: str, items: List[Dict[str, Any]], columns: List[str]) -> int:
     if sheet_name in wb.sheetnames:
@@ -465,6 +489,7 @@ def write_sheet_selected_columns(wb, sheet_name: str, items: List[Dict[str, Any]
 
     autosize_columns(ws)
     return len(items)
+
 
 def merge_sheet_selected_columns(
     wb,
@@ -528,9 +553,11 @@ def _norm_cell(v: Any) -> str:
     s = str(v)
     return s.strip()
 
+
 def _row_key_from_values(values: List[Any]) -> str:
     payload = "\x1f".join(_norm_cell(v) for v in values)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
 
 def _load_existing_row_keys(ws, columns: List[str]) -> Set[str]:
     keys: Set[str] = set()
@@ -596,67 +623,209 @@ def _fetch_generic_endpoint(
         else:
             all_items = []
 
+    try:
+        import integration_db_log
+
+        integration_db_log.log_info(
+            f"Fetched {endpoint_name}: {len(all_items)} item(s); paged={paged}. "
+            f"Next step: merge/write to Excel and xero.{endpoint_name.replace(' ', '_')}.",
+            event_type="api.fetch.completed",
+            module_name="xero_jobs",
+            function_name="_fetch_generic_endpoint",
+            endpoint=endpoint_name,
+            entity_name=root,
+            record_count=len(all_items),
+            status=integration_db_log.STATUS_SUCCESS,
+            step_name="_fetch_generic_endpoint",
+            detail=f"path={path}; incremental_since_iso={incremental_since_iso}",
+            payload_summary=integration_db_log.payload_summary_from_obj(
+                {"url": url, "paged": paged, "if_modified_since": bool(incremental_since_iso)}
+            ),
+        )
+    except Exception:
+        pass
+
     return all_items
 
-def _refresh_headers_after_401(current_headers: Dict[str, str]) -> Optional[Dict[str, str]]:
+
+def _refresh_headers_after_401(
+    current_headers: Dict[str, str],
+    token_path: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
     tenant_id = current_headers.get("xero-tenant-id")
     if not tenant_id:
         return None
     try:
         from xero_auth import headers_from_token_file
-        return headers_from_token_file(tenant_id)
+        return headers_from_token_file(
+            tenant_id=tenant_id,
+            token_path=token_path,
+            client_id=os.environ.get("XERO_CLIENT_ID"),
+            client_secret=os.environ.get("XERO_CLIENT_SECRET"),
+        )
     except Exception as e:
         logger.warning("401 recovery: could not refresh headers from token file (%s)", e)
         return None
 
-def _force_refresh_headers(current_headers: Dict[str, str]) -> Optional[Dict[str, str]]:
+
+def _force_refresh_headers(
+    current_headers: Dict[str, str],
+    token_path: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
     tenant_id = current_headers.get("xero-tenant-id")
     if not tenant_id:
         return None
     try:
-        from xero_auth import refresh_token_file_inplace, headers_from_token_file, default_token_path
+        from xero_auth import refresh_token_file_inplace, headers_from_token_file
         cid = os.environ.get("XERO_CLIENT_ID")
         csec = os.environ.get("XERO_CLIENT_SECRET")
         if not cid or not csec:
             logger.warning("401 force-refresh skipped (missing XERO_CLIENT_ID/SECRET in env)")
             return None
-        token_path = default_token_path()
+        if not token_path:
+            logger.warning("401 force-refresh skipped (missing token_path)")
+            return None
+
         refresh_token_file_inplace(token_path, cid, csec)
-        return headers_from_token_file(tenant_id)
+        return headers_from_token_file(
+            tenant_id=tenant_id,
+            token_path=token_path,
+            client_id=cid,
+            client_secret=csec,
+        )
     except Exception as e:
         logger.warning("401 force-refresh failed (%s)", e)
         return None
 
+
+# Timeout for Xero API calls (seconds). Journals can be slow with large datasets.
+XERO_REQUEST_TIMEOUT = int(os.getenv("XERO_REQUEST_TIMEOUT", "120"))
+
+
+def _integration_log_run_done(
+    endpoint_name: str,
+    rows_written: int,
+    status: str,
+    mode: str,
+    err: Optional[str],
+    t0: float,
+) -> None:
+    """DB audit: endpoint run completed; closes xero.sync_run and writes integration_log event."""
+    try:
+        import integration_db_log
+
+        ok = status == "OK"
+        evt_status = integration_db_log.STATUS_SUCCESS if ok else integration_db_log.STATUS_FAILED
+        integration_db_log.log_info(
+            f"Endpoint run finished: {endpoint_name} worker_status={status} rows_written={rows_written}",
+            event_type="endpoint.run.completed",
+            module_name="xero_jobs",
+            function_name="run_endpoint_selected",
+            endpoint=endpoint_name,
+            status=evt_status,
+            step_name="run_endpoint_selected",
+            record_count=rows_written,
+            duration_ms=int((time.perf_counter() - t0) * 1000),
+            detail=f"mode={mode}" + (f"; error={err}" if err else ""),
+        )
+        rid = integration_db_log.get_log_context().get("run_id")
+        if rid:
+            integration_db_log.complete_sync_run(
+                rid,
+                final_status=integration_db_log.STATUS_SUCCESS if ok else integration_db_log.STATUS_FAILED,
+                total_records=rows_written,
+                total_errors=0 if ok else 1,
+                message=(err or None) if not ok else None,
+            )
+    except Exception:
+        pass
+
+
+def _requests_get_with_log(
+    url: str,
+    headers: Dict[str, str],
+    params: Optional[Dict[str, Any]],
+    *,
+    attempt: int,
+    substep: str,
+) -> requests.Response:
+    """GET with integration_db_log timing and safe response capture."""
+    t0 = time.perf_counter()
+    r = requests.get(url, headers=headers, params=params or {}, timeout=XERO_REQUEST_TIMEOUT)
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    try:
+        import integration_db_log
+
+        if integration_db_log.is_enabled():
+            integration_db_log.log_http_response(
+                request_url=url,
+                request_method="GET",
+                request_params=params,
+                request_headers=headers,
+                status_code=r.status_code,
+                duration_ms=elapsed_ms,
+                response_text=r.text if getattr(r, "text", None) else None,
+                step_name=f"{substep} attempt={attempt}",
+                tenant_id=headers.get("xero-tenant-id"),
+                endpoint=substep,
+                message=f"GET {substep} HTTP {r.status_code} in {elapsed_ms}ms",
+            )
+    except Exception:
+        pass
+    return r
+
+
 def _get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None) -> requests.Response:
     max_attempts = 8
     base_sleep = 1.0
+    conn_retries = 3  # retry on connection drop (RemoteDisconnected, etc.)
+    token_path = os.environ.get("XERO_TOKEN_PATH")
 
     for attempt in range(1, max_attempts + 1):
         time.sleep(XERO_THROTTLE_SECONDS)
 
-        r = requests.get(url, headers=headers, params=params or {}, timeout=90)
+        for conn_attempt in range(conn_retries):
+            try:
+                r = _requests_get_with_log(
+                    url, headers, params, attempt=attempt, substep="xero.api.get"
+                )
+                break
+            except (RequestsConnectionError, Urllib3ProtocolError, OSError) as conn_err:
+                if conn_attempt < conn_retries - 1:
+                    wait = 5 * (conn_attempt + 1)
+                    logger.warning(
+                        "Connection error (attempt %s/%s), retrying in %ss: %s",
+                        conn_attempt + 1, conn_retries, wait, conn_err
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
 
         if r.status_code == 304:
             return r
 
         if r.status_code == 401:
-            new_headers = _refresh_headers_after_401(headers)
+            new_headers = _refresh_headers_after_401(headers, token_path=token_path)
             if new_headers:
                 logger.warning("Xero 401: reloaded Authorization from token file; retrying url=%s", url)
                 headers.update(new_headers)
                 time.sleep(XERO_THROTTLE_SECONDS)
-                r = requests.get(url, headers=headers, params=params or {}, timeout=90)
+                r = _requests_get_with_log(
+                    url, headers, params, attempt=attempt, substep="xero.api.get.after_401_reload"
+                )
                 if r.status_code == 304:
                     return r
                 if r.status_code == 200:
                     return r
 
-            forced = _force_refresh_headers(headers)
+            forced = _force_refresh_headers(headers, token_path=token_path)
             if forced:
                 logger.warning("Xero 401: forced token refresh; retrying url=%s", url)
                 headers.update(forced)
                 time.sleep(XERO_THROTTLE_SECONDS)
-                r = requests.get(url, headers=headers, params=params or {}, timeout=90)
+                r = _requests_get_with_log(
+                    url, headers, params, attempt=attempt, substep="xero.api.get.after_force_refresh"
+                )
                 if r.status_code == 304:
                     return r
                 if r.status_code == 200:
@@ -811,7 +980,103 @@ def _fetch_journals_offset(
         last_offset = next_offset
         offset = next_offset
 
+    try:
+        import integration_db_log
+
+        integration_db_log.log_info(
+            f"Journals offset pagination finished: collected={len(out_items)} journal(s), "
+            f"reached_created_cutoff={reached_cutoff}. "
+            f"If count is zero, check date filters and tenant scope.",
+            event_type="api.journals.pagination.completed",
+            module_name="xero_jobs",
+            function_name="_fetch_journals_offset",
+            endpoint="/Journals",
+            record_count=len(out_items),
+            status="OK",
+            detail=(
+                f"batch_limit={batch_limit}; incremental_since_iso={incremental_since_iso}; "
+                f"stop_after_no_new_batches={stop_after_no_new_batches}"
+            ),
+        )
+    except Exception:
+        pass
+
     return out_items, reached_cutoff
+
+
+def extract_journal_line_rows(journal_obj: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Flatten a single Journal object into JournalLines-shaped rows.
+    Reused by test orchestration and normal JournalLines run logic.
+    """
+    out: List[Dict[str, Any]] = []
+    source_type = journal_obj.get("SourceType")
+    source_id = journal_obj.get("SourceID")
+    for line in (journal_obj.get("JournalLines", []) or []):
+        line2 = dict(line) if isinstance(line, dict) else {"_raw": line}
+        if line2.get("LineAmount") in (None, ""):
+            fallback_amt = line2.get("NetAmount")
+            if fallback_amt in (None, ""):
+                fallback_amt = line2.get("GrossAmount")
+            if fallback_amt in (None, ""):
+                fallback_amt = line2.get("Amount")
+            if fallback_amt not in (None, ""):
+                line2["LineAmount"] = fallback_amt
+        out.append({
+            "JournalID": journal_obj.get("JournalID"),
+            "JournalNumber": journal_obj.get("JournalNumber"),
+            "JournalDate": journal_obj.get("JournalDate"),
+            "SourceType": source_type,
+            "SourceID": source_id,
+            "JournalLine": line2,
+        })
+    return out
+
+
+def fetch_journal_lines_sample(
+    headers: Dict[str, str],
+    max_journals: int = 10,
+    start_after: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[int]]:
+    """
+    Fetch a small journal sample and flatten into JournalLines rows.
+    Returns: (journals, line_rows, next_start_after)
+    """
+    url = f"{XERO_API_BASE}/Journals"
+    params: Dict[str, Any] = {}
+    if start_after is not None:
+        params["offset"] = start_after
+
+    r = _get_json(url, headers=headers, params=params)
+    j = r.json()
+    journals = (j.get("Journals", []) if isinstance(j, dict) else []) or []
+    journals = journals[:max(0, int(max_journals or 0))]
+
+    full_journals: List[Dict[str, Any]] = []
+    line_rows: List[Dict[str, Any]] = []
+    last_journal_number: Optional[int] = None
+
+    for item in journals:
+        journal_id = item.get("JournalID")
+        if not journal_id:
+            continue
+        detail_url = f"{XERO_API_BASE}/Journals/{journal_id}"
+        detail_resp = _get_json(detail_url, headers=headers)
+        detail_json = detail_resp.json()
+        if isinstance(detail_json, dict) and detail_json.get("Journals"):
+            full_journal = detail_json["Journals"][0]
+        elif isinstance(detail_json, dict) and detail_json.get("Journal"):
+            full_journal = detail_json["Journal"]
+        else:
+            full_journal = item
+        full_journals.append(full_journal)
+        line_rows.extend(extract_journal_line_rows(full_journal))
+        try:
+            last_journal_number = int(full_journal.get("JournalNumber"))
+        except Exception:
+            pass
+
+    return full_journals, line_rows, last_journal_number
 
 # ---------------------------
 # JournalLines: checkpoint helpers
@@ -822,6 +1087,7 @@ def _checkpoint_path_for_excel(excel_path: str) -> str:
     os.makedirs(cdir, exist_ok=True)
     return os.path.join(cdir, JOURNALLINES_CHECKPOINT_NAME)
 
+
 def _load_checkpoint(path: str) -> Optional[Dict[str, Any]]:
     try:
         if not os.path.exists(path):
@@ -831,11 +1097,13 @@ def _load_checkpoint(path: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+
 def _save_checkpoint(path: str, data: Dict[str, Any]) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, path)
+
 
 def _delete_checkpoint(path: str) -> None:
     try:
@@ -879,12 +1147,48 @@ def run_endpoint_selected(
     excel_path: str,
     selected_columns: Optional[List[str]] = None,
     incremental_since_iso: Optional[str] = None,
+    mode: str = "full",
+    max_journals: Optional[int] = None,
+    start_after: Optional[int] = None,
 ) -> Tuple[int, str, str, Optional[str]]:
     """
     Returns: (rows_written, status, mode, error)
     """
     ensure_excel(excel_path)
     wb = load_workbook(excel_path)
+    _run_t0 = time.perf_counter()
+    try:
+        import integration_db_log
+
+        _run_id = integration_db_log.new_run_id()
+        integration_db_log.start_sync_run(
+            _run_id,
+            correlation_id=integration_db_log.get_log_context().get("correlation_id"),
+            tenant_id=headers.get("xero-tenant-id"),
+            endpoint_name=endpoint_name,
+        )
+        integration_db_log.set_log_context(
+            run_id=_run_id,
+            tenant_id=headers.get("xero-tenant-id"),
+        )
+        integration_db_log.log_info(
+            f"Endpoint run started: {endpoint_name}",
+            event_type="endpoint.run.started",
+            module_name="xero_jobs",
+            function_name="run_endpoint_selected",
+            endpoint=endpoint_name,
+            status=integration_db_log.STATUS_IN_PROGRESS,
+            step_name="run_endpoint_selected",
+            detail=(
+                f"excel_path={excel_path}; mode={mode}; incremental_since_iso={incremental_since_iso}; "
+                f"max_journals={max_journals}; start_after={start_after}"
+            ),
+            payload_summary=integration_db_log.payload_summary_from_obj(
+                {"column_count": len(selected_columns or []), "endpoint": endpoint_name}
+            ),
+        )
+    except Exception:
+        pass
 
     try:
         allowed = set(endpoint_columns(endpoint_name))
@@ -896,6 +1200,19 @@ def run_endpoint_selected(
             raise ValueError(f"Invalid columns for {endpoint_name}: {bad}")
 
         assert "xero-tenant-id" in headers and headers["xero-tenant-id"], "Missing tenant id"
+
+        if endpoint_name == "JournalLines" and mode in {"sample_test", "incremental_control", "incremental_batch"}:
+            journals, line_rows, checkpoint = fetch_journal_lines_sample(
+                headers=headers,
+                max_journals=int(max_journals or 10),
+                start_after=start_after,
+            )
+            mode_label = f"{mode} start_after={start_after} next={checkpoint}"
+            append_run_log(wb, endpoint_name, mode_label, len(line_rows), "OK", None)
+            save_workbook_atomic(wb, excel_path)
+            logger.info("JournalLines test mode=%s journals=%s lines=%s", mode, len(journals), len(line_rows))
+            _integration_log_run_done(endpoint_name, len(line_rows), "OK", mode_label, None, _run_t0)
+            return len(line_rows), "OK", mode_label, None
 
         # -----------------------
         # Journals: bulletproof run
@@ -932,6 +1249,7 @@ def run_endpoint_selected(
             numbers = _journal_number_set_from_sheet(wsj, cols)
             discontinuity = _detect_discontinuity(numbers)
 
+            items_b: List[Dict[str, Any]] = []
             rows_b = 0
             if discontinuity:
                 existing_ids2: Set[str] = _load_first_col_set(wsj)
@@ -949,7 +1267,19 @@ def run_endpoint_selected(
             mode2 = mode + (f" + GAPFILL({rows_b})" if discontinuity else "")
             append_run_log(wb, endpoint_name, mode2, rows_written, "OK", None)
             save_workbook_atomic(wb, excel_path)
+
+            all_journal_items = items_a + items_b
+            try:
+                from xero_db import save_endpoint_to_db
+                db_rows = [{c: get_by_path(item, c) for c in cols} for item in all_journal_items]
+                db_written = save_endpoint_to_db("Journals", db_rows, cols)
+                if db_written:
+                    logger.info("Journals: wrote %s rows to DB (xero.Journals)", db_written)
+            except Exception as db_err:
+                logger.warning("DB write skipped for Journals: %s", db_err)
+
             logger.info("Wrote %s rows to %s (mode=%s)", rows_written, endpoint_name, mode2)
+            _integration_log_run_done(endpoint_name, rows_written, "OK", mode2, None, _run_t0)
             return rows_written, "OK", mode2, None
 
         # -----------------------
@@ -1036,6 +1366,21 @@ def run_endpoint_selected(
                 append_run_log(wb, endpoint_name, mode, 0, "OK", None)
                 _delete_checkpoint(checkpoint_path)
                 save_workbook_atomic(wb, excel_path)
+                try:
+                    import integration_db_log
+
+                    integration_db_log.log_info(
+                        "JournalLines: nothing to process (pending_ids empty). Zero records written.",
+                        event_type="transform.zero_records",
+                        module_name="xero_jobs",
+                        function_name="run_endpoint_selected",
+                        endpoint="JournalLines",
+                        record_count=0,
+                        status="OK",
+                    )
+                except Exception:
+                    pass
+                _integration_log_run_done(endpoint_name, 0, "OK", mode, None, _run_t0)
                 return 0, "OK", mode, None
 
             if sheet_name not in wb.sheetnames:
@@ -1081,6 +1426,38 @@ def run_endpoint_selected(
                 out = []
                 source_type = journal_obj.get("SourceType")
                 source_id = journal_obj.get("SourceID")
+
+                # fallback from Journals header sheet when detail payload omits them
+                if source_type in (None, ""):
+                    source_type = next(
+                        (
+                            get_by_path(
+                                {
+                                    "SourceType": ws_journals.cell(row=r, column=journals_cols.index("SourceType") + 1).value
+                                },
+                                "SourceType"
+                            )
+                            for r in range(2, ws_journals.max_row + 1)
+                            if str(ws_journals.cell(row=r, column=1).value) == str(journal_obj.get("JournalID"))
+                        ),
+                        None
+                    )
+
+                if source_id in (None, ""):
+                    source_id = next(
+                        (
+                            get_by_path(
+                                {
+                                    "SourceID": ws_journals.cell(row=r, column=journals_cols.index("SourceID") + 1).value
+                                },
+                                "SourceID"
+                            )
+                            for r in range(2, ws_journals.max_row + 1)
+                            if str(ws_journals.cell(row=r, column=1).value) == str(journal_obj.get("JournalID"))
+                        ),
+                        None
+                    )
+
                 for line in (journal_obj.get("JournalLines", []) or []):
                     line2 = dict(line) if isinstance(line, dict) else {"_raw": line}
                     if line2.get("LineAmount") in (None, ""):
@@ -1113,7 +1490,7 @@ def run_endpoint_selected(
                     ws_proc.append([jid, jnum, cdu, hhash, utc_now_iso(), 0])
                     proc_appended += 1
                 else:
-                    rows = _detail_to_rows(jobj)
+                    rows = extract_journal_line_rows(jobj)
                     buffer.extend(rows)
                     ws_proc.append([jid, jnum, cdu, hhash, utc_now_iso(), len(rows)])
                     proc_appended += 1
@@ -1145,10 +1522,31 @@ def run_endpoint_selected(
             append_run_log(wb, endpoint_name, mode, rows_written, "OK", None)
             save_workbook_atomic(wb, excel_path)
 
+            try:
+                from xero_db import save_endpoint_to_db
+
+                db_rows = []
+                if sheet_name in wb.sheetnames:
+                    ws_db = wb[sheet_name]
+                    if ws_db.max_row >= 2:
+                        headers_row = [c.value for c in ws_db[1]]
+                        for r in range(2, ws_db.max_row + 1):
+                            row_dict = {}
+                            for c_idx, col_name in enumerate(headers_row, start=1):
+                                row_dict[col_name] = ws_db.cell(row=r, column=c_idx).value
+                            db_rows.append(row_dict)
+
+                db_written = save_endpoint_to_db("JournalLines", db_rows, selected_columns)
+                if db_written:
+                    logger.info("JournalLines: wrote %s rows to DB (xero.JournalLines)", db_written)
+            except Exception as db_err:
+                logger.warning("DB write skipped for JournalLines: %s", db_err)
+
             logger.info(
                 "JournalLines fill complete: lines_written=%s journals_touched=%s changed=%s markers_appended=%s",
                 rows_written, len(pending_ids), len(changed_ids), proc_appended
             )
+            _integration_log_run_done(endpoint_name, rows_written, "OK", mode, None, _run_t0)
             return rows_written, "OK", mode, None
 
         # -----------------------
@@ -1163,6 +1561,24 @@ def run_endpoint_selected(
                 rows_written = 0
                 append_run_log(wb, endpoint_name, mode, 0, "OK", None)
                 save_workbook_atomic(wb, excel_path)
+                try:
+                    import integration_db_log
+
+                    integration_db_log.log_info(
+                        f"Incremental fetch returned zero records for {endpoint_name} "
+                        f"(If-Modified-Since may apply). Check watermark and API data.",
+                        event_type="api.zero_records",
+                        module_name="xero_jobs",
+                        function_name="run_endpoint_selected",
+                        endpoint=endpoint_name,
+                        status=integration_db_log.STATUS_WARNING,
+                        step_name="run_endpoint_selected",
+                        record_count=0,
+                        detail=f"incremental_since_iso={incremental_since_iso}",
+                    )
+                except Exception:
+                    pass
+                _integration_log_run_done(endpoint_name, 0, "OK", mode, None, _run_t0)
                 return 0, "OK", mode, None
             if incremental_since_iso and items:
                 key_col = cols[0] if cols else endpoint_columns(endpoint_name)[0]
@@ -1171,16 +1587,52 @@ def run_endpoint_selected(
                 rows_written = write_sheet_selected_columns(wb, sheet_name, items, cols)
             append_run_log(wb, endpoint_name, mode, rows_written, "OK", None)
             save_workbook_atomic(wb, excel_path)
+
+            # Persist to Azure SQL (xero schema) if DB is configured
+            try:
+                from xero_db import save_endpoint_to_db
+                db_rows = [{c: get_by_path(item, c) for c in cols} for item in items]
+                db_written = save_endpoint_to_db(endpoint_name, db_rows, cols)
+                if db_written:
+                    logger.info("Generic endpoint %s: wrote %s rows to DB (xero.%s)", endpoint_name, db_written, endpoint_name)
+            except Exception as db_err:
+                logger.warning("DB write skipped for %s: %s", endpoint_name, db_err)
+
             logger.info("Generic endpoint %s: wrote %s rows (mode=%s)", endpoint_name, rows_written, mode)
+            _integration_log_run_done(endpoint_name, rows_written, "OK", mode, None, _run_t0)
             return rows_written, "OK", mode, None
 
         raise ValueError(f"Unknown endpoint: {endpoint_name}")
 
     except Exception as e:
-        mode = "FULL" if not incremental_since_iso else f"INCREMENTAL since {incremental_since_iso}"
-        append_run_log(wb, endpoint_name, mode, 0, "FAILED", str(e))
+        try:
+            import integration_db_log
+
+            integration_db_log.log_exception(
+                f"Endpoint run failed: {endpoint_name}",
+                e,
+                endpoint=endpoint_name,
+                step_name="run_endpoint_selected",
+                module_name="xero_jobs",
+                function_name="run_endpoint_selected",
+                duration_ms=int((time.perf_counter() - _run_t0) * 1000),
+                detail=f"excel_path={excel_path}; incremental_since_iso={incremental_since_iso}",
+            )
+            rid = integration_db_log.get_log_context().get("run_id")
+            if rid:
+                integration_db_log.complete_sync_run(
+                    rid,
+                    final_status=integration_db_log.STATUS_FAILED,
+                    total_records=0,
+                    total_errors=1,
+                    message=str(e)[:4000],
+                )
+        except Exception:
+            pass
+        mode_label = mode if mode != "full" else ("FULL" if not incremental_since_iso else f"INCREMENTAL since {incremental_since_iso}")
+        append_run_log(wb, endpoint_name, mode_label, 0, "FAILED", str(e))
         backup_dir = os.path.join(os.path.dirname(excel_path), "backups")
         backup_file(excel_path, backup_dir, f"excel_before_{excel_safe_sheet_name(endpoint_name)}_FAILED")
         save_workbook_atomic(wb, excel_path)
-        logger.exception("Run failed for %s (mode=%s)", endpoint_name, mode)
-        return 0, "FAILED", mode, str(e)
+        logger.exception("Run failed for %s (mode=%s)", endpoint_name, mode_label)
+        return 0, "FAILED", mode_label, str(e)

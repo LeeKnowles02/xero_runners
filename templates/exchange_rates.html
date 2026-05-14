@@ -1,0 +1,131 @@
+{% extends 'layout.html' %}
+{% block title %}Exchange Rates | Xero Runner{% endblock %}
+
+{% block content %}
+  <div class="stack-24">
+    <div class="stack-6">
+      <h1 class="h1">Exchange Rates</h1>
+      <div class="muted">
+        Load FX quotes from <strong>Frankfurter</strong> into <code>xero.ExchangeRates</code>.
+        Process audit: <code>xero.ProcessLog</code> (process: <em>Xero Exchange Rates Load</em>).
+      </div>
+      <div class="muted small" style="margin-top: 8px; max-width: 920px;">
+        Run <code>sql/xero_exchange_rates.sql</code> on Azure SQL if tables are missing.
+        Configure <code>FRANKFURTER_*</code> in <code>.env</code>. Default base URL is
+        <code>https://api.frankfurter.dev/v1/latest</code>; you can also use
+        <code>https://api.frankfurter.app/latest</code> if needed.
+      </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="stack-8">
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}" role="alert">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Load latest rates</h2>
+      </div>
+      <div class="card-body">
+        <form
+          method="post"
+          action="{{ url_for('exchange_rates_run') }}"
+          data-loader-form="true"
+          data-loader-message="Loading latest exchange rates from Frankfurter…"
+        >
+          <button type="submit" class="btn btn-primary btn-md js-loader-trigger js-disable-while-loading">
+            Load Latest Exchange Rates
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Latest exchange rates</h2>
+      </div>
+      <div class="card-body">
+        {% if rates %}
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Rate Date</th>
+                  <th>Base Currency</th>
+                  <th>Quote Currency</th>
+                  <th>Rate</th>
+                  <th>Provider</th>
+                  <th>Loaded At UTC</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in rates %}
+                  <tr>
+                    <td>{{ r.RateDate }}</td>
+                    <td>{{ r.BaseCurrency }}</td>
+                    <td>{{ r.QuoteCurrency }}</td>
+                    <td>{{ r.Rate }}</td>
+                    <td>{{ r.Provider or '—' }}</td>
+                    <td>{{ r.LoadedAtUTC }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="muted">No rows in <code>xero.ExchangeRates</code> yet. Run the SQL script and load rates above.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2 class="h2">Recent process logs</h2>
+        <div class="muted small">ProcessName = <code>Xero Exchange Rates Load</code></div>
+      </div>
+      <div class="card-body">
+        {% if logs %}
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Log ID</th>
+                  <th>Status</th>
+                  <th>Started UTC</th>
+                  <th>Finished UTC</th>
+                  <th>Detail / Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for log in logs %}
+                  <tr>
+                    <td>{{ log.LogID }}</td>
+                    <td><span class="pill pill-neutral">{{ log.Status }}</span></td>
+                    <td>{{ log.StartedAtUTC }}</td>
+                    <td>{{ log.FinishedAtUTC or '—' }}</td>
+                    <td class="cell-truncate" title="{{ log.ErrorMessage or log.Detail or '' }}">
+                      {% if log.ErrorMessage %}
+                        <strong>Error:</strong> {{ log.ErrorMessage[:200] }}{% if log.ErrorMessage|length > 200 %}…{% endif %}
+                      {% elif log.Detail %}
+                        {{ log.Detail[:280] }}{% if log.Detail|length > 280 %}…{% endif %}
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="muted">No process log rows yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endblock %}

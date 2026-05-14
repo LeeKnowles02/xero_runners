@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 import argparse
 import logging
 from dotenv import load_dotenv
@@ -41,6 +42,26 @@ def main():
     if not cid or not csec:
         raise RuntimeError("Missing XERO_CLIENT_ID / XERO_CLIENT_SECRET in .env")
 
+    try:
+        import integration_db_log
+        import time as _time
+
+        _batch_t0 = _time.perf_counter()
+        integration_db_log.set_log_context(correlation_id=integration_db_log.new_correlation_id())
+        integration_db_log.log_info(
+            "CLI run_jobs: configuration loaded from .env; starting scheduled/manual batch",
+            event_type="run_jobs.batch.started",
+            module_name="run_jobs",
+            function_name="main",
+            status=integration_db_log.STATUS_IN_PROGRESS,
+            detail=(
+                "Credentials present (not logged). Each endpoint will get its own run_id inside "
+                "run_endpoint_selected; use correlation_id to tie this process to integration_log rows."
+            ),
+        )
+    except Exception:
+        _batch_t0 = None  # type: ignore
+
     token_store = FileTokenStore(TOKEN_PATH)
     state = JsonStateStore(STATE_PATH)
 
@@ -64,6 +85,11 @@ def main():
 
     headers = xero.headers()
 
+    # XR-005: track endpoint failures so we can exit non-zero at the end.
+    # launchd / cron / CI use the exit code to decide whether a run succeeded;
+    # silently exiting 0 after partial failures masked real problems.
+    failures = 0
+
     for ep in endpoints:
         cols = state.get_preset(ep) or endpoint_columns(ep)
         watermark = state.get_watermark(ep) if incremental else None
@@ -78,9 +104,55 @@ def main():
 
         if status == "OK":
             state.set_watermark_now(ep)
+        else:
+            failures += 1  # XR-005
 
         logger.info("%s: %s rows=%s mode=%s err=%s", ep, status, rows, mode, err)
         print(f"{ep}: {status} rows={rows} mode={mode} err={err}")
 
+    try:
+        import integration_db_log
+        import time as _time
+
+        if _batch_t0 is not None:
+            dur = int((_time.perf_counter() - _batch_t0) * 1000)
+            integration_db_log.log_info(
+                f"CLI run_jobs batch finished: {len(endpoints)} endpoint(s) processed, "
+                f"{failures} failure(s)",
+                event_type="run_jobs.batch.completed",
+                module_name="run_jobs",
+                function_name="main",
+                status=integration_db_log.STATUS_SUCCESS,
+                duration_ms=dur,
+                detail=f"endpoints={endpoints!r}; incremental={incremental}; failures={failures}",
+            )
+        integration_db_log.set_log_context(clear=True)
+    except Exception:
+        pass
+
+    # XR-005: tell the scheduler the truth. Any non-OK endpoint => exit non-zero.
+    # launchd / cron / a future Azure Function Timer will read this exit code.
+    if failures:
+        logger.warning(
+            "XR-005: %s of %s endpoint(s) failed. Exiting with code 1.",
+            failures, len(endpoints)
+        )
+        sys.exit(1)
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        try:
+            import integration_db_log
+
+            integration_db_log.log_exception(
+                "run_jobs CLI terminated with an exception",
+                e,
+                step_name="main",
+                detail="Check .env, token file, network, and prior integration_log rows for this host.",
+            )
+            integration_db_log.set_log_context(clear=True)
+        except Exception:
+            pass
+        raise
