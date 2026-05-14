@@ -73,6 +73,18 @@ class JsonStateStore:
 						data.setdefault("watermarks", {})[endpoint] = ts
 						self._write(data)
 						return ts
+
+		def set_watermark(self, endpoint: str, iso_value: str) -> str:
+				"""
+				XR-020: explicit-timestamp variant of set_watermark_now.
+				Callers pass the run-start timestamp (captured BEFORE any HTTP work) so
+				that records modified DURING the run are still picked up next time.
+				"""
+				with self._lock:
+						data = self._read()
+						data.setdefault("watermarks", {})[endpoint] = iso_value
+						self._write(data)
+						return iso_value
 			
 		def get_schedule(self) -> Dict[str, Any]:
 				with self._lock:
