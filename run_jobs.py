@@ -33,6 +33,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--endpoints", default="", help="comma-separated endpoints")
     parser.add_argument("--incremental", default="1", help="1 or 0")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run even if state.schedule.enabled is False (use for manual ad-hoc runs).",
+    )
     args = parser.parse_args()
 
     load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -43,6 +48,16 @@ def main():
 
     token_store = FileTokenStore(TOKEN_PATH)
     state = JsonStateStore(STATE_PATH)
+
+    # Honour the schedule.enabled toggle from state.json so the UI switch
+    # actually disables scheduled runs. Manual CLI runs can override with --force.
+    schedule = state.get_schedule() or {}
+    if not schedule.get("enabled", False) and not args.force:
+        logger.info(
+            "Schedule disabled (state.schedule.enabled=False). "
+            "Exiting without running. Pass --force to override."
+        )
+        return
 
     xero = XeroAuth(
         client_id=cid,
