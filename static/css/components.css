@@ -6,41 +6,33 @@
 html,
 body {
     height: 100%;
-}
-
-html {
+    margin: 0;
+    padding: 0;
     overflow: hidden;
 }
 
 body {
-    margin: 0;
     font-family: Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
     font-size: var(--body);
-    overflow: hidden;
 }
 
 .app {
-    display: grid;
-    grid-template-columns: 260px minmax(0, 1fr);
+    display: flex;
     height: 100vh;
-    min-height: 0;
-    width: 100%;
     overflow: hidden;
 }
 
 .sidebar {
     display: flex;
     flex-direction: column;
+    flex: 0 0 260px;
     height: 100vh;
     border-right: 1px solid var(--border);
     background: var(--surface);
     padding: 18px 14px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+    overflow: hidden;
 }
 
 .sidebar::-webkit-scrollbar {
@@ -162,11 +154,51 @@ body {
 }
 
 .main {
-    padding: 22px 22px 40px;
+    flex: 1;
     height: 100vh;
     overflow-y: auto;
     overflow-x: hidden;
     min-width: 0;
+    padding: 22px 22px 40px;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+
+.main:hover {
+    scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+}
+
+.main::-webkit-scrollbar {
+    width: 6px;
+}
+
+.main::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.main::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+}
+
+.main:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.main::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+[data-theme="light"] .main:hover {
+    scrollbar-color: rgba(0, 0, 0, 0.1) transparent;
+}
+
+[data-theme="light"] .main:hover::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .main::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.2);
 }
 
 .container {
