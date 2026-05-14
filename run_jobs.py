@@ -82,9 +82,12 @@ def main():
         # fallback: run all known endpoints
         endpoints = list_endpoints()
 
-    headers = xero.headers()
-
     for ep in endpoints:
+        # XR-006: refresh headers per endpoint so a long batch doesn't reuse a 30-min-stale token.
+        # xero.headers() -> ensure_valid_access_token() is a cheap memory check when the token
+        # is still valid; it only triggers a refresh HTTP call once expiry is reached.
+        headers = xero.headers()
+
         cols = state.get_preset(ep) or endpoint_columns(ep)
         watermark = state.get_watermark(ep) if incremental else None
 
