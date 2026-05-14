@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from log_utils import setup_logging
 from xero_auth import XeroAuth, FileTokenStore
 from xero_jobs import ensure_excel, list_endpoints, endpoint_columns, run_endpoint_selected
-from state_store import JsonStateStore
+from state_store import JsonStateStore, utc_now_iso
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -88,6 +88,11 @@ def main():
         cols = state.get_preset(ep) or endpoint_columns(ep)
         watermark = state.get_watermark(ep) if incremental else None
 
+        # XR-020: capture run-start BEFORE making any HTTP calls.
+        # On success we set the watermark to this timestamp (not utc_now_iso()),
+        # so records modified DURING the run are still picked up by the next pull.
+        run_start_iso = utc_now_iso()
+
         rows, status, mode, err = run_endpoint_selected(
             endpoint_name=ep,
             headers=headers,
@@ -97,7 +102,7 @@ def main():
         )
 
         if status == "OK":
-            state.set_watermark_now(ep)
+            state.set_watermark(ep, run_start_iso)  # XR-020
 
         logger.info("%s: %s rows=%s mode=%s err=%s", ep, status, rows, mode, err)
         print(f"{ep}: {status} rows={rows} mode={mode} err={err}")
