@@ -1049,6 +1049,11 @@ def run_endpoint_selected(
     ensure_excel(excel_path)
     wb = load_workbook(excel_path)
 
+    # XR-024: track rows actually written so far in this run.
+    # If we crash mid-flight, the FAILED entry in the run log should report the real number,
+    # not a misleading 0. Updated at each progress point inside the branches below.
+    rows_written_so_far = 0
+
     try:
         allowed = set(endpoint_columns(endpoint_name))
         if not selected_columns:
@@ -1081,6 +1086,7 @@ def run_endpoint_selected(
                 ws_sample.append(values)
                 appended += 1
 
+            rows_written_so_far += appended  # XR-024: progress for truthful FAILED logging
             autosize_columns(ws_sample)
             append_run_log(wb, endpoint_name, mode_label, appended, "OK", None)
             save_workbook_atomic(wb, excel_path)
@@ -1121,6 +1127,7 @@ def run_endpoint_selected(
                 created_cutoff_dt=created_cutoff,
             )
             rows_a = merge_sheet_selected_columns(wb, sheet_name, items_a, cols, "JournalID")
+            rows_written_so_far += rows_a  # XR-024
 
             numbers = _journal_number_set_from_sheet(wsj, cols)
             discontinuity = _detect_discontinuity(numbers)
@@ -1138,6 +1145,7 @@ def run_endpoint_selected(
                     created_cutoff_dt=None,
                 )
                 rows_b = merge_sheet_selected_columns(wb, sheet_name, items_b, cols, "JournalID")
+                rows_written_so_far += rows_b  # XR-024
 
             rows_written = rows_a + rows_b
             mode2 = mode + (f" + GAPFILL({rows_b})" if discontinuity else "")
@@ -1291,10 +1299,11 @@ def run_endpoint_selected(
                     return 0
 
             def _flush_chunk(row_dicts: List[Dict[str, Any]], next_index: int, chunk_label: str) -> int:
-                nonlocal rows_written
+                nonlocal rows_written, rows_written_so_far
                 appended_rows = _append_rows_local(row_dicts)
                 appended_count = len(appended_rows)
                 rows_written += appended_count
+                rows_written_so_far += appended_count  # XR-024: progress for truthful FAILED logging
                 autosize_columns(ws_lines)
                 autosize_columns(ws_proc)
                 save_workbook_atomic(wb, excel_path)
@@ -1478,6 +1487,7 @@ def run_endpoint_selected(
                 rows_written = merge_sheet_selected_columns(wb, sheet_name, items, cols, key_col)
             else:
                 rows_written = write_sheet_selected_columns(wb, sheet_name, items, cols)
+            rows_written_so_far += rows_written  # XR-024
             append_run_log(wb, endpoint_name, mode, rows_written, "OK", None)
             save_workbook_atomic(wb, excel_path)
 
@@ -1498,9 +1508,14 @@ def run_endpoint_selected(
 
     except Exception as e:
         mode_label = mode if mode != "full" else ("FULL" if not incremental_since_iso else f"INCREMENTAL since {incremental_since_iso}")
-        append_run_log(wb, endpoint_name, mode_label, 0, "FAILED", str(e))
+        # XR-024: report the rows we actually wrote before failing, not 0.
+        # The status stays "FAILED" so callers (run_jobs.py / routes/api.py) still skip the watermark bump.
+        error_msg = str(e)
+        if rows_written_so_far > 0:
+            error_msg = f"wrote {rows_written_so_far} rows before failing: {error_msg}"
+        append_run_log(wb, endpoint_name, mode_label, rows_written_so_far, "FAILED", error_msg)
         backup_dir = os.path.join(os.path.dirname(excel_path), "backups")
         backup_file(excel_path, backup_dir, f"excel_before_{excel_safe_sheet_name(endpoint_name)}_FAILED")
         save_workbook_atomic(wb, excel_path)
-        logger.exception("Run failed for %s (mode=%s)", endpoint_name, mode_label)
-        return 0, "FAILED", mode_label, str(e)
+        logger.exception("Run failed for %s (mode=%s) after %s rows", endpoint_name, mode_label, rows_written_so_far)
+        return rows_written_so_far, "FAILED", mode_label, error_msg
