@@ -11,10 +11,17 @@
     <div class="card">
       <div class="card-header">
         <h2 class="h2">Appearance</h2>
-        <div class="muted">Use the theme switcher in the Options menu (bottom of the sidebar) to switch between Light, Dark, or System.</div>
+        <div class="muted">Choose how Xero Runner looks. Your preference is saved in this browser.</div>
       </div>
       <div class="card-body">
-        <p class="muted">Your theme preference is saved in this browser.</p>
+        <div class="theme-switcher">
+          <label class="muted" style="font-size: 12px; font-weight: 600;">Theme</label>
+          <div class="theme-buttons" role="group" aria-label="Theme">
+            <button type="button" class="theme-btn" data-theme="light" title="Light">Light</button>
+            <button type="button" class="theme-btn" data-theme="dark" title="Dark">Dark</button>
+            <button type="button" class="theme-btn" data-theme="system" title="System">System</button>
+          </div>
+        </div>
       </div>
     </div>
 

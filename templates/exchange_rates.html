@@ -53,6 +53,14 @@
         {% if rates %}
           <div class="table-wrap">
             <table class="data-table">
+              <colgroup>
+                <col style="width: 14%;" />
+                <col style="width: 14%;" />
+                <col style="width: 16%;" />
+                <col style="width: 14%;" />
+                <col style="width: 16%;" />
+                <col style="width: 26%;" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Rate Date</th>
@@ -92,6 +100,13 @@
         {% if logs %}
           <div class="table-wrap">
             <table class="data-table">
+              <colgroup>
+                <col style="width: 10%;" />
+                <col style="width: 12%;" />
+                <col style="width: 18%;" />
+                <col style="width: 18%;" />
+                <col style="width: 42%;" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Log ID</th>
@@ -108,7 +123,7 @@
                     <td><span class="pill pill-neutral">{{ log.Status }}</span></td>
                     <td>{{ log.StartedAtUTC }}</td>
                     <td>{{ log.FinishedAtUTC or '—' }}</td>
-                    <td class="cell-truncate" title="{{ log.ErrorMessage or log.Detail or '' }}">
+                    <td class="cell-wrap" title="{{ log.ErrorMessage or log.Detail or '' }}">
                       {% if log.ErrorMessage %}
                         <strong>Error:</strong> {{ log.ErrorMessage[:200] }}{% if log.ErrorMessage|length > 200 %}…{% endif %}
                       {% elif log.Detail %}
